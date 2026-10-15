@@ -8,23 +8,41 @@ Vos documents ne quittent jamais votre ordinateur : la lecture, l'OCR et l'extra
 
 ## Ce que fait le complément
 
-| Fonction | Ce qui se passe |
-|---|---|
-| **Texte** (Text Snip) | Entourez un texte ou un montant → il s'inscrit dans la cellule active (montants convertis en nombres, ex. « 1 484,86 » → 1484,86). Cellule en bleu. |
-| **Somme** (Sum Snip) | Entourez un ou plusieurs montants, sur une ou plusieurs zones/pages → le total s'inscrit dans la cellule. Cellule en jaune. |
-| **Valider** (Validation Snip) | Entourez l'élément vérifié → ✓ vert dans la cellule, coche verte sur la pièce. |
-| **Exception** (Exception Snip) | Entourez l'anomalie → ✗ rouge dans la cellule, marque rouge sur la pièce. |
-| **Commentaire** | Entourez une zone et tapez une remarque → commentaire Excel sur la cellule, lié à la pièce. |
-| **Tableau** (Table Snip) | Entourez un tableau (ex. les opérations d'un relevé) → colonnes détectées automatiquement, ajustables, puis insertion de toutes les lignes, sur plusieurs pages d'un coup. Les lignes de suite (libellé sur 2 lignes) sont fusionnées. |
-| **Recherche** | Cherche un texte ou un montant dans tous les documents importés. |
-| **Trouver les sommes** | Sélectionnez des totaux dans Excel → SnipCompta retrouve dans les pièces la suite de montants qui donne chaque total. |
-| **Supprimer des snips** | Dans la sélection ou tous : les liens et couleurs sont retirés, les valeurs restent. |
-| **Exporter** | Crée une feuille « Piste d'audit » listant chaque snip (cellule cliquable, valeur, document, page, date). |
-| **Rapprochement** | Sélectionnez une colonne Excel (montants, n° de facture, libellés) → chaque cellule retrouvée dans les pièces passe en vert avec un lien vers la preuve, les autres en rouge. |
-| **Liens cellule ↔ preuve** | Cliquez une cellule « snipée » → la pièce s'ouvre à la bonne page, zone surlignée. Cliquez une zone colorée sur la pièce → Excel sélectionne la cellule. Les liens suivent les cellules si vous insérez des lignes. |
-| **OCR** | Les scans et photos sont lus automatiquement (français + anglais). |
+**Snips** (liens cellule ↔ preuve)
+- **Text Snip** : entourez un texte ou un montant → il s'inscrit dans la cellule active (montants convertis en nombres).
+- **Validation / Exception Snip** : ✓ vert ou ✗ rouge. Si la cellule contient déjà une valeur, elle est **conservée** (seuls la couleur et le lien sont ajoutés).
+- **Sum Snip** : additionne plusieurs zones, même sur plusieurs pages.
+- **Table Snip** : extrait un tableau sur une ou plusieurs pages (colonnes ajustables, lignes de suite fusionnées).
+- **Ctrl + glisser** : ajoute une preuve supplémentaire au snip de la cellule active (plusieurs preuves pour une cellule).
+- **Relier un snip à d'autres cellules** (onglet Snips) : une preuve pour plusieurs cellules.
+- **Clic droit** sur une zone : aller à la cellule, convertir (Texte ↔ Validation ↔ Exception), supprimer.
+- **Couleurs personnalisables** pour chaque type de snip.
+- **Après un tri** dans Excel, les liens suivent leurs valeurs (et bouton « Recaler les liens »).
 
-Raccourcis (quand le panneau a le focus) : `1` Naviguer · `2` Texte · `3` Somme · `4` Valider · `5` Exception · `6` Tableau · `7` Commentaire · `Entrée` insérer la somme / le tableau · `Échap` annuler · `↶` annule le dernier snip.
+**Annotations sur les pièces**
+- Bulles de commentaire (avec « résolu »), surlignage, texte, flèches, coches, croix.
+- **Caviardage** : masque définitivement des informations sensibles (le texte disparaît réellement de la pièce).
+- **Commentaire Excel lié** : la remarque devient un commentaire sur la cellule.
+
+**Documents**
+- Import de fichiers, **dossiers entiers**, **archives ZIP**, TXT/CSV/HTML (convertis en PDF), **PDF protégés par mot de passe**, collage Ctrl+V.
+- **Organiseur** : dossiers de rangement, renommer, retirer.
+- **Export des pièces annotées** (PDF avec snips, annotations et commentaires).
+- **Retirer les pages sans snips / sans exceptions**, **compresser** les pièces.
+- **Nouvelle version d'un document** (même nom, contenu différent) : le travail est transféré et recalé sur le texte.
+- OCR des scans (français + anglais), fait sur votre PC.
+
+**Automatisation**
+- **Document Matching** : cellule par cellule, ou **ligne par ligne** (une pièce par ligne d'échantillon) avec options par colonne : obligatoire, approximatif (fautes, abréviations), partiel, tolérance (montant ou %), modèles réutilisables.
+- **Find all sums** : dans le document affiché (chaque total et ses composants → feuille « Sommes trouvées ») ou à partir de totaux sélectionnés dans Excel.
+- **Document Extraction** : formulaire par modèle (champs recalés sur leur libellé, une ligne par document ou par page, modèles), **factures** (fournisseur, n°, dates, HT, TVA, TTC, SIRET, TVA intracom., IBAN, contrôle HT + TVA = TTC) et **reçus**.
+- **Version Compare** : différences entre deux versions d'un document, exportables.
+- **Recherche** dans toutes les pièces (dates dans tous les formats) avec bouton **Snip**, et recherche automatique de la cellule sélectionnée (option).
+- **Piste d'audit** : feuille listant tous les snips avec liens cliquables.
+
+Raccourcis : `Ctrl+=` Texte · `Ctrl+,` Validation · `Ctrl+.` Exception · `Ctrl+[` Somme · `Ctrl+M` Tableau · `Ctrl+Z` annuler · `1`…`9` outils · `←` `→` pages · `Entrée` insérer · `Échap` annuler.
+
+**Non inclus** (demandent l'IA ou des services en ligne de DataSnipper) : agents Excel, extraction par IA, WebSnip, intégrations SharePoint/Xero, fenêtre de visionneuse détachable, documents Word/Excel en source (enregistrez-les en PDF).
 
 ---
 
@@ -96,6 +114,12 @@ Il faut **Excel Microsoft 365 sur Windows** (l'onglet du ruban utilise une techn
 
 ---
 
+## Mettre à jour le complément
+
+1. Sur GitHub, dans votre dépôt : **+** → **Upload files**, glissez le contenu du paquet de mise à jour (fichiers et dossiers), puis **Commit changes**. Les fichiers existants sont remplacés.
+2. Remplacez `manifest.xml` dans votre dossier `SnipCompta-manifeste` par la nouvelle version.
+3. Fermez Excel, videz le dossier `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\` (collez ce chemin dans la barre de l'Explorateur), rouvrez Excel.
+
 ## Bon à savoir
 
 - **Taille du classeur** : chaque pièce enregistrée alourdit le fichier (environ sa propre taille × 1,35). Pour les gros volumes, décochez « Enregistrer les documents dans le classeur » dans l'onglet Documents : les liens restent, il suffira de réimporter le même fichier pour revoir la preuve.
@@ -118,5 +142,5 @@ SnipCompta est un outil indépendant, sans lien avec DataSnipper.
 |---|---|
 | `manifest.xml` | Carte d'identité du complément pour Excel (à modifier, étape 2) |
 | `taskpane.html`, `taskpane.css`, `taskpane.js` | Le complément lui-même |
-| `assets/` | Icônes (dont `assets/rb/` pour les boutons du ruban) |
-| `lib/` | Bibliothèques open source intégrées : pdf.js (lecture PDF, Mozilla, licence Apache 2.0) et Tesseract.js (OCR, licence Apache 2.0) |
+| `assets/` | Icônes (dont `assets/rb2/` pour les boutons du ruban) |
+| `lib/` | Bibliothèques open source intégrées : pdf.js (lecture PDF, Apache 2.0), Tesseract.js (OCR, Apache 2.0), pdf-lib (édition PDF, MIT), JSZip (archives, MIT/GPLv3) |

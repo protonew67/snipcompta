@@ -8,6 +8,8 @@
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <script src="lib/pdfjs/pdf.min.js"></script>
   <script src="lib/tesseract/tesseract.min.js"></script>
+  <script src="lib/pdflib/pdf-lib.min.js"></script>
+  <script src="lib/jszip/jszip.min.js"></script>
   <link rel="stylesheet" href="taskpane.css">
 </head>
 <body>
@@ -19,6 +21,7 @@
       <button data-tab="search">Recherche</button>
       <button data-tab="snips">Snips</button>
       <button data-tab="match">Rapprochement</button>
+      <button data-tab="auto">Automatisation</button>
     </nav>
   </header>
 
@@ -27,21 +30,23 @@
     <section id="tab-viewer" class="tab active">
       <div class="toolbar modes">
         <button data-mode="nav" class="active" title="Naviguer sans créer de snip (touche 1)">🖐<span>Naviguer</span></button>
-        <button data-mode="text" title="Text Snip : extraire un texte ou un montant (touche 2)">T<span>Texte</span></button>
-        <button data-mode="sum" title="Sum Snip : additionner des montants (touche 3)">Σ<span>Somme</span></button>
-        <button data-mode="valid" title="Validation Snip : marquer comme vérifié (touche 4)">✓<span>Valider</span></button>
-        <button data-mode="except" title="Exception Snip : marquer comme anomalie (touche 5)">✗<span>Exception</span></button>
-        <button data-mode="table" title="Table Snip : extraire un tableau (touche 6)">▦<span>Tableau</span></button>
-        <button data-mode="comment" title="Commentaire lié à la pièce (touche 7)">✎<span>Comment.</span></button>
+        <button data-mode="text" title="Text Snip : extraire un texte ou un montant (touche 2 ou Ctrl+=)">T<span>Texte</span></button>
+        <button data-mode="sum" title="Sum Snip : additionner des montants (touche 3 ou Ctrl+[)">Σ<span>Somme</span></button>
+        <button data-mode="valid" title="Validation Snip : marquer comme vérifié (touche 4 ou Ctrl+,)">✓<span>Valider</span></button>
+        <button data-mode="except" title="Exception Snip : marquer comme anomalie (touche 5 ou Ctrl+.)">✗<span>Exception</span></button>
+        <button data-mode="table" title="Table Snip : extraire un tableau (touche 6 ou Ctrl+M)">▦<span>Tableau</span></button>
+        <button data-mode="comment" title="Commentaire Excel lié à la pièce (touche 7)">✎<span>Comment.</span></button>
+        <button data-mode="markup" title="Annoter la pièce : surligner, texte, flèche, coche, croix, caviarder (touche 8)">🖍<span>Annoter</span></button>
+        <button data-mode="note" title="Bulle de commentaire sur la pièce (touche 9)">💬<span>Note</span></button>
       </div>
       <div class="toolbar docbar">
         <select id="docSelect" title="Document affiché"></select>
-        <button id="prevPage" title="Page précédente">‹</button>
+        <button id="prevPage" title="Page précédente (←)">‹</button>
         <span id="pageInfo">–</span>
-        <button id="nextPage" title="Page suivante">›</button>
+        <button id="nextPage" title="Page suivante (→)">›</button>
         <button id="zoomOut" title="Zoom arrière">−</button>
         <button id="zoomIn" title="Zoom avant">+</button>
-        <button id="undoBtn" title="Annuler le dernier snip">↶</button>
+        <button id="undoBtn" title="Annuler le dernier snip (Ctrl+Z)">↶</button>
       </div>
       <div id="ctxPanel" hidden></div>
       <div id="viewer">
@@ -51,8 +56,9 @@
         </div>
         <div id="emptyState">
           <p><strong>Aucun document ouvert.</strong></p>
-          <p>Importez un relevé, une facture ou un scan (PDF, PNG, JPG), ou glissez-le ici.</p>
+          <p>Importez des relevés, factures, scans, archives .zip ou un dossier entier — ou glissez-les ici, ou collez-les (Ctrl+V).</p>
           <button class="primary" data-action="import">Importer des documents</button>
+          <button data-action="importFolder">Importer un dossier</button>
         </div>
       </div>
     </section>
@@ -60,22 +66,47 @@
     <!-- ===== DOCUMENTS ===== -->
     <section id="tab-docs" class="tab">
       <div class="pad">
-        <button class="primary" data-action="import">Importer des documents</button>
+        <div class="row">
+          <button class="primary" data-action="import">Importer des documents</button>
+          <button data-action="importFolder">Importer un dossier</button>
+        </div>
+        <div class="row">Ranger les imports dans
+          <select id="importFolderSel"><option value="">Sans dossier</option></select>
+          <input id="newFolder" type="text" placeholder="Nouveau dossier" size="12"><button id="addFolder">Créer</button>
+        </div>
         <ul id="docList" class="list"></ul>
+        <h3>Gérer les pièces</h3>
+        <div class="row">
+          <button id="expAnnCur" title="PDF avec les zones snipées, annotations et commentaires">Exporter la pièce affichée (annotée)</button>
+          <button id="expAnnAll">Exporter toutes les pièces (annotées)</button>
+        </div>
+        <div class="row">
+          <button id="rmNoSnips" title="Sur le document affiché">Retirer les pages sans snips</button>
+          <button id="rmNoExc" title="Sur le document affiché : ne garde que les pages avec une exception">Retirer les pages sans exceptions</button>
+          <button id="compressBtn" title="Réduit la taille des pièces enregistrées dans le classeur">Compresser les pièces</button>
+        </div>
+        <p class="hint">Formats acceptés : PDF (y compris protégés par mot de passe), PNG, JPG, BMP, GIF, WEBP, TXT/CSV/HTML (convertis en PDF) et archives ZIP. Pour Word ou Excel : enregistrez-les d'abord en PDF.</p>
+
         <h3>Options</h3>
         <label class="chk"><input type="checkbox" id="optStore" checked> Enregistrer les documents dans le classeur (ils restent disponibles à la réouverture)</label>
         <label class="chk"><input type="checkbox" id="optOcr" checked> OCR automatique des pages scannées (reconnaissance du texte, faite sur votre PC)</label>
         <label class="chk"><input type="checkbox" id="optAdvance" checked> Descendre d'une ligne dans Excel après chaque snip</label>
-        <p class="hint">Raccourcis : 1 Naviguer · 2 Texte · 3 Somme · 4 Valider · 5 Exception · 6 Tableau · 7 Commentaire · Entrée = insérer la somme / le tableau · Échap = annuler.</p>
+        <label class="chk"><input type="checkbox" id="opt_pasteImport" checked> Importer les fichiers collés avec Ctrl+V dans le panneau</label>
+        <label class="chk"><input type="checkbox" id="opt_autoSearch"> Chercher automatiquement dans les pièces la valeur de la cellule sélectionnée</label>
+        <label class="chk"><input type="checkbox" id="opt_sortFollow" checked> Après un tri dans Excel, déplacer les liens avec leurs valeurs</label>
+        <h3>Couleurs des snips</h3>
+        <div id="styleBox"></div>
+        <p class="hint">Raccourcis : 1 Naviguer · 2 Texte · 3 Somme · 4 Valider · 5 Exception · 6 Tableau · 7 Commentaire · 8 Annoter · 9 Note · Ctrl+= Texte · Ctrl+, Valider · Ctrl+. Exception · Ctrl+[ Somme · Ctrl+M Tableau · Ctrl+Z annuler · ← → pages · Entrée insérer · Échap annuler · Ctrl+glisser = ajouter une preuve au snip de la cellule active · clic droit sur une zone = convertir / supprimer.</p>
         <div id="helpBox">
           <h3>Aide rapide</h3>
           <ol class="hint" style="padding-left:18px;margin:4px 0">
             <li>Onglet <b>SNIPCOMPTA</b> du ruban → <b>Importer</b> vos relevés, factures ou scans.</li>
             <li>Cliquez la cellule Excel de destination.</li>
-            <li>Choisissez un outil (Texte, Validation, Exception, Somme, Tableau, Commentaire) et entourez la zone sur la pièce.</li>
-            <li>Cliquez une cellule colorée pour revoir sa preuve ; cliquez une zone colorée pour retrouver sa cellule.</li>
-            <li><b>Rapprochement</b> : sélectionnez une colonne de montants ou de références, puis lancez-le pour tout pointer d'un coup.</li>
-            <li><b>Trouver les sommes</b> : sélectionnez des totaux, SnipCompta retrouve les montants qui les composent.</li>
+            <li>Choisissez un outil (Texte, Validation, Exception, Somme, Tableau) et entourez la zone sur la pièce.</li>
+            <li>Validation / Exception sur une cellule déjà remplie : la valeur est conservée, seule la couleur et le lien sont ajoutés.</li>
+            <li>Cliquez une cellule colorée pour revoir sa preuve ; cliquez une zone colorée pour retrouver sa cellule ; clic droit pour la convertir ou la supprimer.</li>
+            <li><b>Rapprochement</b> : pointez une colonne (cellule par cellule) ou un tableau entier (ligne par ligne, une pièce par ligne).</li>
+            <li><b>Automatisation</b> : sommes du document, extraction de formulaires, factures et reçus, comparaison de versions.</li>
           </ol>
         </div>
       </div>
@@ -85,10 +116,11 @@
     <section id="tab-search" class="tab">
       <div class="pad">
         <form id="searchForm" class="row">
-          <input id="searchInput" type="search" placeholder="Texte ou montant (ex. 1 250,00)">
+          <input id="searchInput" type="search" placeholder="Texte, montant ou date (ex. 1 250,00 ou 15/10/2026)">
           <button class="primary" type="submit">Chercher</button>
         </form>
         <label class="chk"><input type="checkbox" id="searchOcr"> Inclure les pages scannées (lance l'OCR si besoin, plus lent)</label>
+        <div class="hint">Les dates sont trouvées quel que soit leur format (15/10/2026, 15.10.26, 2026-10-15…). Le bouton « Snip » inscrit le résultat dans la cellule Excel active.</div>
         <div id="searchInfo" class="hint"></div>
         <ul id="searchResults" class="list"></ul>
       </div>
@@ -103,25 +135,94 @@
           <button id="delSelBtn">Supprimer ceux de la sélection</button>
           <button id="exportBtn">Exporter la piste d'audit</button>
         </div>
+        <div class="row">
+          Afficher <select id="snipFilter"><option value="all">tous les snips</option><option value="sel">ceux de la sélection Excel</option><option value="doc">ceux du document affiché</option></select>
+        </div>
+        <div class="row">
+          <button id="linkSelBtn" title="Relie le snip sélectionné (dernier cliqué) aux cellules sélectionnées dans Excel">Relier le snip choisi aux cellules sélectionnées</button>
+          <button id="relinkBtn" title="Après un tri : remet chaque lien sur la ligne qui contient sa valeur">Recaler les liens après un tri</button>
+        </div>
         <div id="snipCount" class="hint"></div>
         <ul id="snipList" class="list"></ul>
+        <h3>Annotations sur les pièces</h3>
+        <div id="annotCount" class="hint"></div>
+        <ul id="annotList" class="list"></ul>
       </div>
     </section>
 
     <!-- ===== RAPPROCHEMENT ===== -->
     <section id="tab-match" class="tab">
       <div class="pad">
-        <p>Sélectionnez dans Excel une plage (montants, n° de facture, libellés…), puis lancez la recherche : chaque cellule trouvée dans les documents passe en <span class="ok">vert ✓</span> avec un lien vers la preuve, les autres en <span class="ko">rouge ✗</span>.</p>
+        <div class="row">
+          <label class="chk"><input type="radio" name="mmode" value="cell" checked> Cellule par cellule</label>
+          <label class="chk"><input type="radio" name="mmode" value="row"> Ligne par ligne (Document Matching)</label>
+        </div>
         <label>Documents
           <select id="matchDoc"><option value="*">Tous les documents</option></select>
         </label>
-        <label class="chk"><input type="checkbox" id="matchAbs" checked> Ignorer le signe des montants (−120,00 = 120,00)</label>
-        <label class="chk"><input type="checkbox" id="matchOnce" checked> Une même ligne du document ne peut justifier qu'une seule cellule</label>
-        <label>Tolérance sur les montants <input id="matchTol" type="text" value="0,01" size="6"></label>
-        <button class="primary" id="matchRun">Rapprocher la sélection Excel</button>
-        <button id="sumsRun" title="Pour chaque total sélectionné dans Excel, cherche dans les pièces une suite de montants qui donne ce total">Trouver les sommes de la sélection</button>
+        <div id="cellMatchBox" class="pad0">
+          <p>Sélectionnez dans Excel une plage (montants, n° de facture, libellés…), puis lancez : chaque cellule trouvée passe en <span class="ok">vert ✓</span> avec un lien vers la preuve, les autres en <span class="ko">rouge ✗</span>.</p>
+          <label class="chk"><input type="checkbox" id="matchAbs" checked> Ignorer le signe des montants (−120,00 = 120,00)</label>
+          <label class="chk"><input type="checkbox" id="matchOnce" checked> Une même ligne du document ne peut justifier qu'une seule cellule</label>
+          <label>Tolérance sur les montants <input id="matchTol" type="text" value="0,01" size="6"></label>
+          <button class="primary" id="matchRun">Rapprocher la sélection Excel</button>
+          <button id="sumsRun" title="Pour chaque total sélectionné dans Excel, cherche dans les pièces une suite de montants qui donne ce total">Justifier les totaux sélectionnés</button>
+        </div>
+        <div id="rowMatchBox" class="pad0" hidden>
+          <p>Sélectionnez votre échantillon dans Excel (une ligne par opération : date, n° de facture, montant, client…). Pour chaque ligne, SnipCompta cherche la pièce qui contient le plus de ces valeurs et écrit le résultat <b>à droite</b> de la sélection, chaque valeur liée à sa preuve.</p>
+          <label class="chk"><input type="checkbox" id="rmHeader" checked> La première ligne contient les en-têtes</label>
+          <label class="chk"><input type="checkbox" id="rmOnce" checked> Une pièce ne justifie qu'une seule ligne</label>
+          <button id="rmPrep">Préparer les colonnes</button>
+          <div id="rmInfo" class="hint"></div>
+          <div id="rmCols"></div>
+          <div class="row"><select id="rmTpl"></select><button id="rmLoad">Charger</button><input id="rmTplName" type="text" placeholder="Nom du modèle" size="12"><button id="rmSave">Enregistrer</button></div>
+          <button class="primary" id="rmRun">Lancer le Document Matching</button>
+        </div>
         <div id="matchInfo" class="hint"></div>
         <ul id="matchResults" class="list"></ul>
+      </div>
+    </section>
+
+    <!-- ===== AUTOMATISATION ===== -->
+    <section id="tab-auto" class="tab">
+      <div class="pad">
+        <div id="sumsBox" class="card">
+          <h3>Σ Sommes du document</h3>
+          <p class="hint">Analyse le document affiché (état financier, relevé, facture) et retrouve chaque total et les montants qui le composent. Résultat : une feuille « Sommes trouvées », totaux en bleu, composants en orange.</p>
+          <div class="row"><button class="primary" id="sumsDocBtn">Trouver les sommes du document affiché</button><button id="sumsClear">Effacer les repères</button></div>
+          <ul id="sumsOut" class="list"></ul>
+        </div>
+
+        <div id="formBox" class="card">
+          <h3>▤ Extraction de formulaire (modèle)</h3>
+          <p class="hint">Pour des documents de même mise en page (bulletins de paie, relevés, avis…) : définissez les champs une fois sur un document type, ils sont extraits de tous les autres. Chaque champ se recale grâce à son libellé (« repère »).</p>
+          <div class="row">Mode <select id="formMode"><option value="doc">une ligne par document</option><option value="page">une ligne par page</option></select></div>
+          <div class="row"><button class="primary" id="formAdd">+ Ajouter un champ</button><button id="formClear">Tout effacer</button></div>
+          <ul id="formFields" class="list"></ul>
+          <div class="row"><b>Documents</b><button id="formAll">tout cocher</button></div>
+          <div id="formDocs" class="checks"></div>
+          <div class="row"><button id="formPreview">Aperçu</button><button class="primary" id="formExport">Exporter vers Excel</button></div>
+          <div class="row"><select id="formTpl"></select><button id="formLoad">Charger</button><input id="formTplName" type="text" placeholder="Nom du modèle" size="12"><button id="formSave">Enregistrer</button></div>
+          <div id="formOut"></div>
+        </div>
+
+        <div id="invBox" class="card">
+          <h3>🧾 Factures &amp; reçus</h3>
+          <p class="hint">Lit automatiquement les factures (fournisseur, n°, date, échéance, HT, TVA, TTC, SIRET, n° TVA, IBAN + contrôle HT + TVA = TTC) ou les tickets (commerçant, date, heure, total, TVA), quelle que soit leur mise en page. Fonctionne avec des règles (pas d'IA) : vérifiez toujours les valeurs.</p>
+          <div class="row"><b>Documents</b><button id="invAll">tout cocher</button></div>
+          <div id="invDocs" class="checks"></div>
+          <div class="row"><button class="primary" id="invRun">Extraire les factures</button><button id="recRun">Extraire les reçus</button></div>
+        </div>
+
+        <div id="cmpBox" class="card">
+          <h3>⇄ Comparaison de versions</h3>
+          <p class="hint">Compare deux versions d'un même document (contrat, lettre d'affirmation…) : lignes supprimées en rouge, ajoutées en vert.</p>
+          <label>Ancienne version <select id="cmpA"></select></label>
+          <label>Nouvelle version <select id="cmpB"></select></label>
+          <div class="row"><button class="primary" id="cmpRun">Comparer</button><button id="cmpExport">Exporter vers Excel</button><button id="cmpClear">Effacer</button></div>
+          <div id="cmpInfo" class="hint"></div>
+          <ul id="cmpOut" class="list"></ul>
+        </div>
       </div>
     </section>
   </main>
@@ -131,7 +232,9 @@
     <div id="demoGrid"></div>
   </div>
   <footer id="status">Chargement…</footer>
-  <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp,application/pdf,image/*" hidden>
+  <div id="ctxMenu" hidden></div>
+  <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.jfif,.bmp,.gif,.webp,.zip,.txt,.csv,.tsv,.xml,.json,.html,.htm,application/pdf,image/*" hidden>
+  <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
   <script src="taskpane.js"></script>
 </body>
 </html>
