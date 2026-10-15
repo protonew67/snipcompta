@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>SnipCompta</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="lib/pdfjs/pdf.min.js"></script>
+  <script src="lib/tesseract/tesseract.min.js"></script>
+  <link rel="stylesheet" href="taskpane.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">▣</span> SnipCompta</div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="viewer" class="active">Visionneuse</button>
+      <button data-tab="docs">Documents</button>
+      <button data-tab="search">Recherche</button>
+      <button data-tab="snips">Snips</button>
+      <button data-tab="match">Rapprochement</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===== VISIONNEUSE ===== -->
+    <section id="tab-viewer" class="tab active">
+      <div class="toolbar modes">
+        <button data-mode="nav" class="active" title="Naviguer sans créer de snip (touche 1)">🖐<span>Naviguer</span></button>
+        <button data-mode="text" title="Text Snip : extraire un texte ou un montant (touche 2)">T<span>Texte</span></button>
+        <button data-mode="sum" title="Sum Snip : additionner des montants (touche 3)">Σ<span>Somme</span></button>
+        <button data-mode="valid" title="Validation Snip : marquer comme vérifié (touche 4)">✓<span>Valider</span></button>
+        <button data-mode="except" title="Exception Snip : marquer comme anomalie (touche 5)">✗<span>Exception</span></button>
+        <button data-mode="table" title="Table Snip : extraire un tableau (touche 6)">▦<span>Tableau</span></button>
+        <button data-mode="comment" title="Commentaire lié à la pièce (touche 7)">✎<span>Comment.</span></button>
+      </div>
+      <div class="toolbar docbar">
+        <select id="docSelect" title="Document affiché"></select>
+        <button id="prevPage" title="Page précédente">‹</button>
+        <span id="pageInfo">–</span>
+        <button id="nextPage" title="Page suivante">›</button>
+        <button id="zoomOut" title="Zoom arrière">−</button>
+        <button id="zoomIn" title="Zoom avant">+</button>
+        <button id="undoBtn" title="Annuler le dernier snip">↶</button>
+      </div>
+      <div id="ctxPanel" hidden></div>
+      <div id="viewer">
+        <div id="pageWrap" hidden>
+          <canvas id="pageCanvas"></canvas>
+          <div id="overlay"></div>
+        </div>
+        <div id="emptyState">
+          <p><strong>Aucun document ouvert.</strong></p>
+          <p>Importez un relevé, une facture ou un scan (PDF, PNG, JPG), ou glissez-le ici.</p>
+          <button class="primary" data-action="import">Importer des documents</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== DOCUMENTS ===== -->
+    <section id="tab-docs" class="tab">
+      <div class="pad">
+        <button class="primary" data-action="import">Importer des documents</button>
+        <ul id="docList" class="list"></ul>
+        <h3>Options</h3>
+        <label class="chk"><input type="checkbox" id="optStore" checked> Enregistrer les documents dans le classeur (ils restent disponibles à la réouverture)</label>
+        <label class="chk"><input type="checkbox" id="optOcr" checked> OCR automatique des pages scannées (reconnaissance du texte, faite sur votre PC)</label>
+        <label class="chk"><input type="checkbox" id="optAdvance" checked> Descendre d'une ligne dans Excel après chaque snip</label>
+        <p class="hint">Raccourcis : 1 Naviguer · 2 Texte · 3 Somme · 4 Valider · 5 Exception · 6 Tableau · 7 Commentaire · Entrée = insérer la somme / le tableau · Échap = annuler.</p>
+        <div id="helpBox">
+          <h3>Aide rapide</h3>
+          <ol class="hint" style="padding-left:18px;margin:4px 0">
+            <li>Onglet <b>SNIPCOMPTA</b> du ruban → <b>Importer</b> vos relevés, factures ou scans.</li>
+            <li>Cliquez la cellule Excel de destination.</li>
+            <li>Choisissez un outil (Texte, Validation, Exception, Somme, Tableau, Commentaire) et entourez la zone sur la pièce.</li>
+            <li>Cliquez une cellule colorée pour revoir sa preuve ; cliquez une zone colorée pour retrouver sa cellule.</li>
+            <li><b>Rapprochement</b> : sélectionnez une colonne de montants ou de références, puis lancez-le pour tout pointer d'un coup.</li>
+            <li><b>Trouver les sommes</b> : sélectionnez des totaux, SnipCompta retrouve les montants qui les composent.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== RECHERCHE ===== -->
+    <section id="tab-search" class="tab">
+      <div class="pad">
+        <form id="searchForm" class="row">
+          <input id="searchInput" type="search" placeholder="Texte ou montant (ex. 1 250,00)">
+          <button class="primary" type="submit">Chercher</button>
+        </form>
+        <label class="chk"><input type="checkbox" id="searchOcr"> Inclure les pages scannées (lance l'OCR si besoin, plus lent)</label>
+        <div id="searchInfo" class="hint"></div>
+        <ul id="searchResults" class="list"></ul>
+      </div>
+    </section>
+
+    <!-- ===== SNIPS ===== -->
+    <section id="tab-snips" class="tab">
+      <div class="pad">
+        <div class="row">
+          <button id="refreshSnips">Actualiser</button>
+          <button id="undoBtn2">Annuler le dernier snip</button>
+          <button id="delSelBtn">Supprimer ceux de la sélection</button>
+          <button id="exportBtn">Exporter la piste d'audit</button>
+        </div>
+        <div id="snipCount" class="hint"></div>
+        <ul id="snipList" class="list"></ul>
+      </div>
+    </section>
+
+    <!-- ===== RAPPROCHEMENT ===== -->
+    <section id="tab-match" class="tab">
+      <div class="pad">
+        <p>Sélectionnez dans Excel une plage (montants, n° de facture, libellés…), puis lancez la recherche : chaque cellule trouvée dans les documents passe en <span class="ok">vert ✓</span> avec un lien vers la preuve, les autres en <span class="ko">rouge ✗</span>.</p>
+        <label>Documents
+          <select id="matchDoc"><option value="*">Tous les documents</option></select>
+        </label>
+        <label class="chk"><input type="checkbox" id="matchAbs" checked> Ignorer le signe des montants (−120,00 = 120,00)</label>
+        <label class="chk"><input type="checkbox" id="matchOnce" checked> Une même ligne du document ne peut justifier qu'une seule cellule</label>
+        <label>Tolérance sur les montants <input id="matchTol" type="text" value="0,01" size="6"></label>
+        <button class="primary" id="matchRun">Rapprocher la sélection Excel</button>
+        <button id="sumsRun" title="Pour chaque total sélectionné dans Excel, cherche dans les pièces une suite de montants qui donne ce total">Trouver les sommes de la sélection</button>
+        <div id="matchInfo" class="hint"></div>
+        <ul id="matchResults" class="list"></ul>
+      </div>
+    </section>
+  </main>
+
+  <div id="demoBar" hidden>
+    <div class="demoHead">Mode démo (ouvert hors d'Excel) — mini-feuille : cliquez une cellule, Maj+clic pour une plage.</div>
+    <div id="demoGrid"></div>
+  </div>
+  <footer id="status">Chargement…</footer>
+  <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp,application/pdf,image/*" hidden>
+  <script src="taskpane.js"></script>
+</body>
+</html>
