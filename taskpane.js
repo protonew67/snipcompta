@@ -48,7 +48,7 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261017-1445"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-1512"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
@@ -203,6 +203,17 @@
       const width = (it.width || h * it.str.length * 0.5) * vp.scale;
       const cw = width / it.str.length;
       const re = /\S+/g; let m;
+      const sx = Math.hypot(t[0], t[1]);
+      if (sx && (Math.abs(t[1]) > 0.02 * sx || t[0] < 0)) {
+        // texte tourné (page pivotée, texte vertical ou à l'envers) : boîte englobante des 4 coins
+        const dx = t[0] / sx, dy = t[1] / sx, ux = t[2] / h, uy = t[3] / h;
+        while ((m = re.exec(it.str))) {
+          const s0 = m.index * cw, s1 = (m.index + m[0].length) * cw, xs = [], ys = [];
+          for (const s of [s0, s1]) for (const k of [0.82, -0.22]) { xs.push(x + dx * s + ux * h * k); ys.push(base + dy * s + uy * h * k); }
+          out.push({ str: m[0], x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) });
+        }
+        continue;
+      }
       while ((m = re.exec(it.str))) {
         out.push({ str: m[0], x0: x + m.index * cw, x1: x + (m.index + m[0].length) * cw, y0: base - h * 0.82, y1: base + h * 0.22 });
       }
@@ -2120,6 +2131,11 @@
     $("#zoomOut").onclick = () => zstep(1 / 1.2);
     $("#zoomFitW").onclick = () => setZoom(curDoc(), 1);
     $("#zoomFitP").onclick = () => setZoom(curDoc(), "page");
+    const rot = (q, all) => { const d = curDoc(); if (!d) return status("Ouvrez d'abord une pièce.", "warn"); runAction(() => rotateDoc(d, all ? "all" : S.page, q), { label: "Rotation impossible" }); };
+    $("#rotR").onclick = (e) => rot(1, e.shiftKey); $("#rotL").onclick = (e) => rot(3, e.shiftKey);
+    const mclose = () => { const m = $("#mainMenu"); if (m) m.hidden = true; };
+    $("#mRotR").onclick = () => { mclose(); rot(1); }; $("#mRotL").onclick = () => { mclose(); rot(3); };
+    $("#mRotAll").onclick = () => { mclose(); rot(1, true); };
     $("#undoBtn").onclick = $("#undoBtn2").onclick = () => runAction(() => undoLast(), { label: "Annulation impossible" });
     $("#refreshSnips").onclick = async () => { try { await reloadSnips(); status("Snips actualisés.", "ok"); } catch (e) { status(e.message, "err"); } };
     $("#searchForm").onsubmit = (e) => { e.preventDefault(); runAction(() => doSearch($("#searchInput").value), { label: "Recherche impossible" }); };
@@ -2526,6 +2542,79 @@
     await openDoc(newDoc.id, S.page);
     refreshSnipList();
     status(`Travail transféré vers la nouvelle version : ${moved} zone(s) recalée(s) sur le texte, ${kept} gardée(s) à la même position.`, "ok");
+  }
+
+  /* ---------------- Rotation des pages ------------------------------------ */
+  /** Point (x, y) d'une page W×H après q quarts de tour dans le sens des aiguilles d'une montre. */
+  function rotPt(x, y, W, H, q) {
+    if (q === 1) return [H - y, x];
+    if (q === 2) return [W - x, H - y];
+    return [y, W - x];
+  }
+  function rotRect(r, W, H, q) {
+    const [ax, ay] = rotPt(r.x0, r.y0, W, H, q), [bx, by] = rotPt(r.x1, r.y1, W, H, q);
+    return { x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by) };
+  }
+  /** Pivote une page (ou "all") de q quarts de tour : la pièce est vraiment tournée, les snips suivent. */
+  async function rotateDoc(doc, which, q) {
+    q = ((q % 4) + 4) % 4; if (!q) return;
+    await openDocData(doc);
+    const dims = (await pageDims(doc)).map((d) => ({ ...d }));
+    const pages = which === "all" ? Array.from({ length: doc.numPages }, (_, i) => i + 1)
+      : Array.isArray(which) ? which.filter((p) => p >= 1 && p <= doc.numPages) : [clamp(+which || 1, 1, doc.numPages)];
+    if (!pages.length) return;
+    status(pages.length > 1 ? `Rotation des ${pages.length} pages…` : `Rotation de la page ${pages[0]}…`, "busy");
+    let bytes, mime = null;
+    if (doc.kind === "pdf") {
+      const { PDFDocument, degrees } = libPdf();
+      let pdf;
+      try { pdf = await PDFDocument.load(doc.bytes); }
+      catch (e) { throw new Error(/encrypt/i.test(e.message) ? "ce PDF est protégé : il ne peut pas être modifié" : e.message); }
+      for (const p of pages) { const pg = pdf.getPage(p - 1); pg.setRotation(degrees((((pg.getRotation().angle || 0) + 90 * q) % 360 + 360) % 360)); }
+      bytes = await pdf.save();
+    } else {
+      const img = doc.img, W = img.naturalWidth, H = img.naturalHeight;
+      const c = document.createElement("canvas"); c.width = q % 2 ? H : W; c.height = q % 2 ? W : H;
+      const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+      if (q === 1) { ctx.translate(H, 0); ctx.rotate(Math.PI / 2); }
+      else if (q === 2) { ctx.translate(W, H); ctx.rotate(Math.PI); }
+      else { ctx.translate(0, W); ctx.rotate(-Math.PI / 2); }
+      ctx.drawImage(img, 0, 0);
+      mime = /png/i.test(doc.mime || "") ? "image/png" : "image/jpeg";
+      bytes = new Uint8Array(await (await new Promise((r) => c.toBlob(r, mime, 0.93))).arrayBuffer());
+    }
+    // snips, annotations et bulles suivent la page
+    const on = (docId, page) => docId === doc.id && pages.includes(page);
+    for (const sn of S.snips.values()) sn.rects = sn.rects.map((r) => (on(r.docId || sn.docId, r.page) ? { ...r, ...rotRect(r, dims[r.page - 1].w, dims[r.page - 1].h, q) } : r));
+    for (const m of S.meta.markups) if (on(m.docId, m.page)) {
+      const d = dims[m.page - 1], [a, b] = rotPt(m.x0, m.y0, d.w, d.h, q), [c, e] = rotPt(m.x1, m.y1, d.w, d.h, q);
+      Object.assign(m, { x0: a, y0: b, x1: c, y1: e });
+    }
+    for (const n of S.meta.notes) if (on(n.docId, n.page)) { const d = dims[n.page - 1]; [n.x, n.y] = rotPt(n.x, n.y, d.w, d.h, q); }
+    if (S.table && on(S.table.docId, S.table.page)) S.table = null;
+    S.sumParts = S.sumParts.filter((p) => !on(p.docId, p.page));
+    if (S.hits.some((h) => on(h.docId, h.page))) clearHits();
+    const keep = S.page;
+    await replaceDocBytes(doc, bytes, mime);
+    await persistSnips();
+    if (S.cur === doc.id) scrollToPage(clamp(keep, 1, doc.numPages));
+    drawOverlay(); refreshSnipList();
+    docChangedElsewhere(doc);
+    const what = pages.length > 1 ? "Document pivoté" : `Page ${pages[0]} pivotée`;
+    status(`${what}${doc.stored ? " et enregistré dans le classeur" : ""}.`, "ok",
+      pages.length === 1 && doc.numPages > 1 ? [{ label: "Pivoter aussi les autres pages", fn: () => runAction(() => rotateDoc(doc, Array.from({ length: doc.numPages }, (_, i) => i + 1).filter((p) => p !== pages[0]), q), { label: "Rotation impossible" }) }] : null);
+  }
+  /** La pièce a changé ici : l'autre vue (panneau ou fenêtre séparée) la recharge. */
+  function docChangedElsewhere(doc) {
+    const msg = { event: "docChanged", doc: doc.id };
+    if (S.isWindow) parentSend(msg); else if (S.win) winSend(msg);
+  }
+  async function onDocChanged(id) {
+    const d = S.docs.get(id); if (!d) return;
+    d.bytes = null; d.pdf = null; d.img = null; d.ready = null; d.pages = {}; d.dims = null; d.rev = (d.rev || 0) + 1;
+    try { await reloadSnips(); } catch (_) { /* ignore */ }
+    if (S.cur === id) await render(); else drawOverlay();
+    refreshSnipList();
   }
 
   /* ---------------- Export des pièces annotées --------------------------- */
@@ -3858,6 +3947,7 @@
     if (m.event === "ready") { applyTheme(); return; }
     if (m.event === "winSize") { storeWinSize({ w: m.w, h: m.h }); return; }
     if (m.event === "dock") { closeWindow(); return; }
+    if (m.event === "docChanged") { await onDocChanged(m.doc); return; }
     const { id, op, args = [] } = m;
     if (!id) return;
     const reply = (o) => winSend({ id, ...o });
@@ -3949,6 +4039,7 @@
     else if (m.event === "action") { const fn = getActions()[m.name]; if (fn) runAction(fn); }
     else if (m.event === "open") { if (S.docs.has(m.doc)) openDoc(m.doc, m.page || 1); }
     else if (m.event === "reloadDocs") { await windowLoadDocs(); }
+    else if (m.event === "docChanged") { await onDocChanged(m.doc); }
     else if (m.event === "status") { status(m.msg, m.kind); }
     else if (m.event === "theme") { S.hubDark = !!m.dark; applyTheme(); }
   }
@@ -4521,7 +4612,7 @@
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));

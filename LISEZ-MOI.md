@@ -32,6 +32,7 @@ Vos documents ne quittent jamais votre ordinateur : la lecture, l'OCR et l'extra
 - **Nouvelle version d'un document** (même nom, contenu différent) : le travail est transféré et recalé sur le texte.
 - OCR des scans (français + anglais), fait sur votre PC. Avant la lecture, une copie de l'image est nettoyée (fond, ombres, contraste) et les pages scannées de travers sont redressées. La pièce garde son aspect ; seule une page penchée s'affiche redressée.
 - **Lecture des scans plus précise** (Paramètres) : moteur plus fin, un peu plus lent, téléchargé la première fois (environ 16 Mo). Activable et désactivable à tout moment ; les scans ouverts sont alors relus.
+- **Pivoter une pièce** : boutons ↺ ↻ à côté du zoom (ou menu ⋯). La page est vraiment tournée et enregistrée ainsi ; les snips déjà posés suivent. Maj + clic sur ↻ (ou « Pivoter tout le document » dans le menu) tourne toutes les pages. Un scan couché est relu automatiquement une fois redressé.
 - **Ajuster un snip** : cliquez un snip pour le sélectionner, puis tirez ses poignées (bords et coins) pour agrandir ou réduire la zone. La valeur de la cellule se met à jour. Seul le texte réellement dans la zone est pris, même au milieu d'un mot.
 
 **Automatisation**

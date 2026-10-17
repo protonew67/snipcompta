@@ -587,3 +587,4 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 #pages.drawing .ovbox .hdl.h-n, #pages.drawing .ovbox .hdl.h-s { cursor: ns-resize; }
 #pages.drawing .ovbox .hdl.h-e, #pages.drawing .ovbox .hdl.h-w { cursor: ew-resize; }
 .ovbox.resizable .tag { left: calc(100% + 14px); }
+@media (max-width: 420px) { #rotL { display: none; } }
