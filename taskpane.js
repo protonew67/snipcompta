@@ -52,7 +52,7 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261017-1618"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-1941"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
@@ -616,7 +616,21 @@
   function refreshDocUI() {
     const sel = $("#docSelect"), ms = $("#matchDoc");
     const docs = [...S.docs.values()];
-    sel.innerHTML = docs.length ? docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("") : `<option value="">Aucun document</option>`;
+    // dossiers : filtre de la liste des pièces (comme un classeur à onglets)
+    const folders = [...new Set([...(S.meta.folders || []), ...docs.map((d) => d.folder || "").filter(Boolean)])].sort((a, b) => a.localeCompare(b, "fr"));
+    const fp = $("#folderPick"), fs = $("#folderSelect");
+    if (fp && fs) {
+      fp.hidden = !folders.length;
+      if (S.folderFilter != null && S.folderFilter !== "" && S.folderFilter !== "__none__" && !folders.includes(S.folderFilter)) S.folderFilter = null;
+      const none = docs.some((d) => !d.folder);
+      fs.innerHTML = `<option value="*">Tous les dossiers</option>` + folders.map((f) => `<option value="${esc(f)}">${esc(f)} (${docs.filter((d) => d.folder === f).length})</option>`).join("")
+        + (none ? `<option value="__none__">Sans dossier (${docs.filter((d) => !d.folder).length})</option>` : "");
+      fs.value = S.folderFilter == null ? "*" : S.folderFilter;
+    }
+    const shown = S.folderFilter == null || !folders.length ? docs : docs.filter((d) => (S.folderFilter === "__none__" ? !d.folder : d.folder === S.folderFilter));
+    const list = shown.length ? shown : docs;
+    if (S.cur && !list.some((d) => d.id === S.cur) && S.docs.has(S.cur)) list.unshift(S.docs.get(S.cur));
+    sel.innerHTML = list.length ? list.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("") : `<option value="">Aucun document</option>`;
     document.body.classList.toggle("nodoc", !docs.length);
     if (S.cur) sel.value = S.cur;
     const opts = docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("");
@@ -1295,6 +1309,7 @@
     const ws = wordsInRect(pg.words, r);
     if (!ws.length) return status("Aucun texte dans la zone : élargissez la sélection ou activez l'OCR.", "warn");
     S.table = { docId: doc.id, page: p, rect: r, seps: autoColumns(ws, r), from: p, to: p, excl: new Set() };
+    if (S.tableTpl) tableTplApplyTo(S.table, S.tableTpl.data);        // découpage enregistré : repris tel quel
     drawOverlay(); updateTablePreview();
   }
 
@@ -1369,6 +1384,9 @@
       ${multi ? `<div class="row">Pages <input type="number" id="tFrom" min="1" max="${doc.numPages}" value="${t.from}"> à <input type="number" id="tTo" min="1" max="${doc.numPages}" value="${t.to}">
         <span class="hint">(même zone sur chaque page)</span></div>` : ""}
       <label class="chk"><input type="checkbox" id="tMerge" ${S.opts.mergeRows ? "checked" : ""}> Recoller les libellés sur plusieurs lignes</label>
+      <div class="row small tp-tpl" id="tTplRow"><select id="tTpl" title="Reprendre le découpage d'un modèle"><option value="">${S.tableTpl ? "Sans modèle (colonnes auto)" : "Modèle de découpage…"}</option>${tplOptions("table", S.tableTpl && S.tableTpl.id)}</select>
+        <button id="tTplNew" title="Garder ce découpage (colonnes, ordre, colonnes retirées) pour les prochains tableaux de même présentation">Enregistrer ce découpage…</button></div>
+      <div class="row small tp-tpl" id="tTplSaveRow" hidden><input id="tTplName" type="text" placeholder="Nom du modèle (ex. Relevé CIC)" maxlength="80" value="${esc(S.tableTpl ? S.tableTpl.name : "")}"><button class="primary" id="tTplSave">Enregistrer</button><button id="tTplCancel">Annuler</button></div>
       <div class="row"><button class="primary" id="tInsert">Insérer dans Excel (Entrée)</button><button id="tAuto">Colonnes auto</button><button id="tCancel">Annuler</button></div>`;
     if (multi) {
       $("#tFrom").onchange = (e) => { t.from = clamp(+e.target.value || 1, 1, doc.numPages); };
@@ -1378,8 +1396,17 @@
     $$("[data-delc]", panel).forEach((b) => { b.onpointerdown = (e) => e.stopPropagation(); b.onclick = () => { tableToggleCol(t, +b.dataset.delc); drawOverlay(); updateTablePreview(); }; });
     bindColumnDrag(panel, t);
     $("#tMerge").onchange = (e) => { S.opts.mergeRows = e.target.checked; saveOpts(); updateTablePreview(); };
+    $("#tTpl").onchange = (e) => {
+      const tp = tplFind(e.target.value);
+      if (!tp) { S.tableTpl = null; t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; t.orderX = null; t.exclX = []; drawOverlay(); updateTablePreview(); return; }
+      tplApply(tp);
+    };
+    $("#tTplNew").onclick = () => { $("#tTplRow").hidden = true; $("#tTplSaveRow").hidden = false; const i = $("#tTplName"); i.focus(); i.select(); };
+    $("#tTplCancel").onclick = () => { $("#tTplRow").hidden = false; $("#tTplSaveRow").hidden = true; };
+    $("#tTplName").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("#tTplSave").click(); } else if (e.key === "Escape") { e.stopPropagation(); $("#tTplCancel").click(); } };
+    $("#tTplSave").onclick = () => { const tp = tplSave("table", $("#tTplName").value, tableTplData(t)); if (tp) S.tableTpl = { id: tp.id, name: tp.name, data: tp.data }; updateTablePreview(); };
     $("#tInsert").onclick = () => runAction(insertTable, { label: "Insertion du tableau impossible" });
-    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; t.orderX = null; t.exclX = []; updateTablePreview(); };
+    $("#tAuto").onclick = () => { S.tableTpl = null; t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; t.orderX = null; t.exclX = []; drawOverlay(); updateTablePreview(); };
     $("#tCancel").onclick = () => { S.table = null; drawOverlay(); updateTablePreview(); };
     drawOverlay();
   }
@@ -2281,6 +2308,7 @@
     $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
     if (name === "docs") refreshDocUI();
     if (name === "snips") refreshSnipList();
+    if (name === "templates") renderTplList();
     if (name === "viewer") setTimeout(render, 0);
     if (S.padPanel) S.padPanel();
     const cf = $("#confirm"); if (cf && name !== "viewer") cf.hidden = true;
@@ -2345,6 +2373,12 @@
     $$("[data-action=import]").forEach((b) => (b.onclick = () => $("#fileInput").click()));
     $("#fileInput").onchange = (e) => { const fs = [...e.target.files]; e.target.value = ""; hideImport(); runAction(() => importFiles(fs), { label: "Import impossible" }); };
     $("#docSelect").onchange = (e) => e.target.value && openDoc(e.target.value, 1);
+    $("#folderSelect").onchange = (e) => {
+      const v = e.target.value; S.folderFilter = v === "*" ? null : v;
+      const inF = [...S.docs.values()].filter((d) => S.folderFilter == null || (S.folderFilter === "__none__" ? !d.folder : d.folder === S.folderFilter));
+      if (inF.length && !inF.some((d) => d.id === S.cur)) openDoc(inF[0].id, 1);
+      refreshDocUI();
+    };
     $("#prevPage").onclick = () => { const d = curDoc(); if (d && S.page > 1) scrollToPage(S.page - 1); };
     $("#nextPage").onclick = () => { const d = curDoc(); if (d && S.page < d.numPages) scrollToPage(S.page + 1); };
     const zstep = (f) => { const d = curDoc(); if (!d) return; let z = zoomFor(d); if (z === "page") z = 1; setZoom(d, z * f); };
@@ -2430,7 +2464,7 @@
     if (res && res.meta) { S.meta = normalizeMeta(res.meta); applyDocMeta(); }
     S.snips.clear();
     for (const raw of list) { const sn = cleanSnip(raw); if (sn) S.snips.set(sn.id, sn); }
-    refreshSnipList(); drawOverlay();
+    refreshSnipList(); drawOverlay(); tplRefreshUI();
   }
   /* Ce qui vient du classeur (ou d'un classeur reçu) est vérifié : types, nombres, identifiants, couleurs. */
   function cleanRect(r) {
@@ -2469,7 +2503,8 @@
       .map((x) => ({ ...x, id: idOf(x), docId: String(x.docId), page: Math.max(1, Math.round(+x.page || 1)), text: String(x.text ?? "") }));
     const docMeta = {};
     if (m.docMeta && typeof m.docMeta === "object") for (const [k, v] of Object.entries(m.docMeta)) if (SAFE_ID.test(k) && v && typeof v === "object") docMeta[k] = { ...(v.name != null ? { name: String(v.name) } : {}), folder: String(v.folder ?? "") };
-    return { markups, notes, docMeta, folders: (Array.isArray(m.folders) ? m.folders : []).map(String) };
+    const templates = (Array.isArray(m.templates) ? m.templates : []).map(cleanTpl).filter(Boolean).slice(0, 200);
+    return { markups, notes, docMeta, folders: (Array.isArray(m.folders) ? m.folders : []).map(String), templates };
   }
   S.meta = normalizeMeta(null);
   Object.assign(S, { markTool: "highlight", markColor: "#FFD400", selMarkup: null, selNote: null, diffMarks: [], sumMarks: [],
@@ -3533,9 +3568,222 @@
     }
     return best;
   }
-  function loadTpl(key) { try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch (_) { return {}; } }
-  function saveTpl(key, obj) { try { localStorage.setItem(key, JSON.stringify(obj)); } catch (_) { status("Impossible d'enregistrer le modèle sur ce PC.", "warn"); } }
-  function renderTplSelect(selId, key) { const el = $(selId); if (!el) return; const t = loadTpl(key); el.innerHTML = `<option value="">— modèles enregistrés —</option>` + Object.keys(t).map((k) => `<option>${esc(k)}</option>`).join(""); }
+  /* ====================================================================== */
+  /* Modèles réutilisables : extraction, rapprochement, découpage de tableau */
+  /* ====================================================================== */
+  const TPL_KEY = "snipcompta.templates";
+  const TPL_KINDS = { form: "Extraction de champs", match: "Rapprochement", table: "Découpage de tableau" };
+  const isObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
+  const okRect = (r) => isObj(r) && ["x0", "y0", "x1", "y1"].every((k) => isNum(r[k]));
+  const frac = (v) => isNum(v) && v >= -0.05 && v <= 1.05;
+  /** Contenu d'un modèle vérifié (il peut venir d'un fichier importé ou d'un classeur reçu). */
+  function cleanTplData(kind, d) {
+    if (!isObj(d)) return null;
+    if (kind === "form") {
+      const R = (r) => ({ x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+      const fields = (Array.isArray(d.fields) ? d.fields : []).filter((f) => isObj(f) && okRect(f.rect)).slice(0, 80).map((f) => ({
+        name: String(f.name ?? "Champ").slice(0, 60), page: Math.max(1, Math.round(+f.page || 1)), rect: R(f.rect),
+        key: isObj(f.key) && okRect(f.key.rect) && f.key.text ? { text: String(f.key.text).slice(0, 200), rect: R(f.key.rect) } : null,
+        sample: String(f.sample ?? "").slice(0, 200) }));
+      return fields.length ? { mode: d.mode === "page" ? "page" : "doc", fields } : null;
+    }
+    if (kind === "match") {
+      const cols = (Array.isArray(d.cols) ? d.cols : []).filter(isObj).slice(0, 80)
+        .map((c) => ({ name: String(c.name ?? "").slice(0, 80), required: !!c.required, fuzzy: !!c.fuzzy, partial: !!c.partial, tol: String(c.tol ?? "").slice(0, 12) }));
+      return { mode: d.mode === "row" ? "row" : "cell", abs: d.abs !== false, once: d.once !== false, tol: String(d.tol ?? "0,01").slice(0, 12),
+        header: d.header !== false, rmOnce: d.rmOnce !== false, cols };
+    }
+    if (kind === "table") {
+      if (!frac(d.x0) || !frac(d.x1) || !(d.x1 > d.x0)) return null;
+      const arr = (a) => (Array.isArray(a) ? a.filter(frac).slice(0, 60) : []);
+      return { x0: d.x0, x1: d.x1, seps: arr(d.seps).sort((a, b) => a - b), orderX: Array.isArray(d.orderX) ? arr(d.orderX) : null, exclX: arr(d.exclX), mergeRows: d.mergeRows !== false };
+    }
+    return null;
+  }
+  function cleanTpl(t) {
+    if (!isObj(t) || !TPL_KINDS[t.kind]) return null;
+    const data = cleanTplData(t.kind, t.data); if (!data) return null;
+    return { id: safeId(t.id) ? String(t.id) : uid(), kind: t.kind, name: String(t.name ?? "").trim().slice(0, 80) || "Modèle", data, updated: isNum(t.updated) ? t.updated : Date.now() };
+  }
+  function tplSaveLocal(list) {
+    try { localStorage.setItem(TPL_KEY, JSON.stringify(list)); return true; }
+    catch (_) { status("Impossible d'enregistrer les modèles sur ce PC (stockage plein ou bloqué).", "warn"); return false; }
+  }
+  /** Modèles enregistrés sur ce PC (les anciens modèles d'avant la v13 sont repris automatiquement). */
+  function tplLocal() {
+    let raw = [];
+    try { raw = JSON.parse(localStorage.getItem(TPL_KEY) || "[]"); } catch (_) { raw = []; }
+    if (!Array.isArray(raw)) raw = [];
+    let migrated = false;
+    for (const [key, kind] of [["snipcompta.formTpl", "form"], ["snipcompta.matchTpl", "match"]]) {
+      let old = null;
+      try { old = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { old = null; }
+      if (!isObj(old)) continue;
+      for (const [name, d] of Object.entries(old)) raw.push({ kind, name, data: kind === "match" ? { mode: "row", header: d && d.header, rmOnce: d && d.once, cols: d && d.cols } : d });
+      try { localStorage.removeItem(key); } catch (_) { /* ignore */ }
+      migrated = true;
+    }
+    const list = raw.map(cleanTpl).filter(Boolean);
+    if (migrated) tplSaveLocal(list);
+    return list;
+  }
+  /** Tous les modèles : ceux du PC, plus ceux enregistrés dans ce classeur (venus d'un autre PC). */
+  function tplAll() {
+    const loc = tplLocal().map((t) => ({ ...t, where: "pc" }));
+    const wb = (S.meta.templates || []).filter((w) => !loc.some((l) => l.kind === w.kind && l.name === w.name)).map((t) => ({ ...t, where: "wb" }));
+    return [...loc, ...wb].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name, "fr"));
+  }
+  const tplFind = (id) => tplAll().find((t) => t.id === id);
+  function tplToWorkbook(t) {
+    S.meta.templates = (S.meta.templates || []).filter((x) => !(x.kind === t.kind && x.name === t.name));
+    S.meta.templates.push({ id: t.id, kind: t.kind, name: t.name, data: t.data, updated: t.updated });
+    persistSoon();
+  }
+  function tplSave(kind, name, data) {
+    name = String(name || "").trim();
+    if (!name) { status("Donnez un nom au modèle.", "warn"); return null; }
+    const t = cleanTpl({ kind, name, data, updated: Date.now() });
+    if (!t) { status("Ce modèle est vide : réglez d'abord les champs, les colonnes ou le découpage.", "warn"); return null; }
+    const list = tplLocal(), i = list.findIndex((x) => x.kind === kind && x.name === t.name);
+    if (i >= 0) { t.id = list[i].id; list[i] = t; } else list.push(t);
+    if (!tplSaveLocal(list)) return null;
+    tplToWorkbook(t); tplRefreshUI();
+    status(`Modèle « ${t.name} » ${i >= 0 ? "mis à jour" : "enregistré"} : réutilisable dans tous vos classeurs.`, "ok");
+    return t;
+  }
+  function tplDelete(t) {
+    tplSaveLocal(tplLocal().filter((x) => x.id !== t.id && !(x.kind === t.kind && x.name === t.name)));
+    S.meta.templates = (S.meta.templates || []).filter((x) => !(x.kind === t.kind && x.name === t.name));
+    if (S.tableTpl && S.tableTpl.id === t.id) S.tableTpl = null;
+    persistSoon(); tplRefreshUI();
+    status(`Modèle « ${t.name} » supprimé.`, "ok");
+  }
+  function tplRename(t, name) {
+    name = String(name || "").trim().slice(0, 80);
+    if (!name || name === t.name) return;
+    if (tplAll().some((x) => x.kind === t.kind && x.name === name)) return status(`Un modèle « ${name} » existe déjà.`, "warn");
+    const list = tplLocal(), i = list.findIndex((x) => x.id === t.id);
+    if (i >= 0) { list[i].name = name; list[i].updated = Date.now(); tplSaveLocal(list); }
+    const w = (S.meta.templates || []).find((x) => x.kind === t.kind && x.name === t.name);
+    if (w) { w.name = name; persistSoon(); }
+    if (S.tableTpl && S.tableTpl.id === t.id) S.tableTpl.name = name;
+    tplRefreshUI();
+  }
+  function tplCopyToPc(t) {
+    const list = tplLocal(); list.push({ id: t.id, kind: t.kind, name: t.name, data: t.data, updated: Date.now() });
+    if (tplSaveLocal(list)) { tplRefreshUI(); status(`Modèle « ${t.name} » copié sur ce PC.`, "ok"); }
+  }
+  /** Réapplique un modèle : les réglages reviennent tels qu'enregistrés. */
+  function tplApply(t) {
+    if (!t) return;
+    if (t.kind === "form") {
+      const d = t.data;
+      S.form.mode = d.mode; const fm = $("#formMode"); if (fm) fm.value = d.mode;
+      S.form.fields = d.fields.map((f) => ({ ...f, id: uid() })); S.form.refDoc = S.cur; S.form.rows = null;
+      const out = $("#formOut"); if (out) out.innerHTML = "";
+      switchTab("auto"); const box = $("#formBox"); if (box) box.open = true;
+      renderAutoDocs(); renderForm(); drawOverlay();
+      status(`Modèle « ${t.name} » appliqué : ${d.fields.length} champ(s). Cochez les documents puis « Aperçu » ou « Exporter vers Excel ».`, "ok");
+    } else if (t.kind === "match") {
+      const d = t.data;
+      const r = $(`input[name=mmode][value=${d.mode}]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change")); }
+      const set = (id, v) => { const e = $(id); if (!e) return; if (e.type === "checkbox") e.checked = v; else e.value = v; };
+      set("#matchAbs", d.abs); set("#matchOnce", d.once); set("#matchTol", d.tol); set("#rmHeader", d.header); set("#rmOnce", d.rmOnce);
+      S.rm.cols = d.cols.map((c) => ({ ...c })); S.rm.tplCols = d.cols.map((c) => ({ ...c }));
+      renderRowMatchCols(); switchTab("match");
+      status(`Modèle « ${t.name} » appliqué. Sélectionnez la plage dans Excel puis lancez le rapprochement.`, "ok");
+    } else if (t.kind === "table") {
+      S.tableTpl = { id: t.id, name: t.name, data: t.data };
+      if (S.table) { tableTplApplyTo(S.table, t.data); drawOverlay(); updateTablePreview(); }
+      else { switchTab("viewer"); setMode("table"); }
+      status(`Découpage « ${t.name} » actif : entourez ou cliquez un tableau, ses colonnes sont reprises.`, "ok");
+    }
+    tplToWorkbook(t);
+  }
+  function tplPayload(list) { return { app: "SnipCompta", type: "modeles", version: 1, exported: new Date().toISOString(), templates: list.map(({ where, ...t }) => t) }; }
+  function tplExport(list, fname) {
+    const bytes = new TextEncoder().encode(JSON.stringify(tplPayload(list), null, 1));
+    download(bytes, fname, "application/json");
+  }
+  async function tplImportFile(file) {
+    let obj;
+    try { obj = JSON.parse(await file.text()); } catch (_) { return status("Ce fichier n'est pas un fichier de modèles SnipCompta.", "err"); }
+    const arr = Array.isArray(obj) ? obj : obj && Array.isArray(obj.templates) ? obj.templates : null;
+    if (!arr) return status("Ce fichier n'est pas un fichier de modèles SnipCompta.", "err");
+    const list = tplLocal(); let n = 0, skipped = 0;
+    for (const raw of arr) {
+      const t = cleanTpl(raw); if (!t) { skipped++; continue; }
+      const same = list.find((x) => x.kind === t.kind && x.name === t.name);
+      if (same && JSON.stringify(same.data) === JSON.stringify(t.data)) continue;          // déjà là
+      if (same) { let k = 2; while (list.some((x) => x.kind === t.kind && x.name === `${t.name} (${k})`)) k++; t.name = `${t.name} (${k})`; }
+      if (list.some((x) => x.id === t.id)) t.id = uid();
+      list.push(t); n++;
+    }
+    if (tplSaveLocal(list)) { tplRefreshUI(); status(`${n} modèle(s) importé(s)${skipped ? ` · ${skipped} ignoré(s) (illisibles)` : ""}.`, n ? "ok" : "warn"); }
+  }
+  /* Découpage de tableau : positions en fraction de la largeur de page (marche aussi sur un scan en pixels) */
+  function pageWidthOf(doc, p) { const pg = doc && doc.pages[p]; return (pg && pg.w) || (doc && doc.dims && doc.dims[p - 1] && doc.dims[p - 1].w) || 595; }
+  function tableTplApplyTo(t, d) {
+    const W = pageWidthOf(S.docs.get(t.docId), t.page), X = (f) => f * W;
+    t.rect = { ...t.rect, x0: X(d.x0), x1: X(d.x1) };
+    t.seps = d.seps.map(X); t.orderX = d.orderX ? d.orderX.map(X) : null; t.exclX = d.exclX.map(X); t.manual = true;
+    S.opts.mergeRows = d.mergeRows;
+  }
+  function tableTplData(t) {
+    const W = pageWidthOf(S.docs.get(t.docId), t.page), F = (x) => x / W;
+    return { x0: F(t.rect.x0), x1: F(t.rect.x1), seps: t.seps.map(F), orderX: t.orderX ? t.orderX.map(F) : null, exclX: (t.exclX || []).map(F), mergeRows: !!S.opts.mergeRows };
+  }
+  function tplOptions(kind, selectedId) {
+    return tplAll().filter((t) => t.kind === kind).map((t) => `<option value="${esc(t.id)}"${t.id === selectedId ? " selected" : ""}>${esc(t.name)}${t.where === "wb" ? " (classeur)" : ""}</option>`).join("");
+  }
+  function renderTplSelect(selId, kind) { const el = $(selId); if (el) el.innerHTML = `<option value="">— modèles enregistrés —</option>` + tplOptions(kind); }
+  function tplRefreshUI() {
+    renderTplSelect("#formTpl", "form"); renderTplSelect("#rmTpl", "match");
+    renderTplList();
+    if (S.table) updateTablePreview();
+  }
+  function renderTplList() {
+    const box = $("#tplList"); if (!box) return;
+    const all = tplAll();
+    if (!all.length) {
+      box.innerHTML = `<div class="empty-tpl"><b>Aucun modèle pour l'instant.</b><br>Créez-en un depuis l'aperçu d'un <b>tableau</b> (« Enregistrer ce découpage »), l'<b>extraction de champs</b> (Automatisation) ou le <b>rapprochement ligne par ligne</b>.</div>`;
+      return;
+    }
+    const date = (ms) => new Date(ms).toLocaleDateString("fr-FR");
+    box.innerHTML = Object.entries(TPL_KINDS).map(([kind, label]) => {
+      const items = all.filter((t) => t.kind === kind); if (!items.length) return "";
+      return `<h3>${esc(label)} <span class="count">${items.length}</span></h3><ul class="list tpl-list">${items.map((t) => {
+        const what = kind === "form" ? `${t.data.fields.length} champ(s)` : kind === "match" ? (t.data.mode === "row" ? `ligne par ligne · ${t.data.cols.length} colonne(s)` : "cellule par cellule") : `${t.data.seps.length + 1} colonne(s)${t.data.exclX.length ? ` · ${t.data.exclX.length} retirée(s)` : ""}`;
+        const active = kind === "table" && S.tableTpl && S.tableTpl.id === t.id;
+        return `<li data-id="${esc(t.id)}"><div class="grow"><div class="ttl">${esc(t.name)}${active ? ` <span class="chip-on">actif</span>` : ""}</div>
+          <div class="sub">${esc(what)} · ${t.where === "wb" ? "dans ce classeur seulement" : "modifié le " + date(t.updated)}</div></div>
+          <div class="tpl-acts"><button class="primary" data-a="apply">Appliquer</button>
+          ${t.where === "wb" ? `<button data-a="copy" title="Garder ce modèle sur ce PC">Copier sur ce PC</button>` : `<button class="ico sm" data-a="rename" title="Renommer"><svg viewBox="0 0 20 20"><path d="M4 14.5V16h1.5L14 7.5 12.5 6zM12.5 6L14 4.5 15.5 6 14 7.5"/></svg></button>`}
+          <button class="ico sm" data-a="export" title="Exporter dans un fichier (pour un collègue ou un autre PC)"><svg viewBox="0 0 20 20"><path d="M10 13V3M6 7l4-4 4 4"/><path d="M3.5 12.5v4h13v-4"/></svg></button>
+          <button class="ico sm danger" data-a="del" title="Supprimer"><svg viewBox="0 0 20 20"><path d="M5 6h10M8 6V4h4v2M6.5 6l.7 10h5.6l.7-10"/></svg></button></div></li>`;
+      }).join("")}</ul>`;
+    }).join("");
+    $$("li[data-id]", box).forEach((li) => {
+      const t = all.find((x) => x.id === li.dataset.id); if (!t) return;
+      $$("[data-a]", li).forEach((b) => (b.onclick = () => {
+        const a = b.dataset.a;
+        if (a === "apply") tplApply(t);
+        else if (a === "copy") tplCopyToPc(t);
+        else if (a === "export") tplExport([t], `Modèle SnipCompta - ${t.name}.json`);
+        else if (a === "rename") {
+          const ttl = $(".ttl", li);
+          ttl.innerHTML = `<input type="text" class="tpl-name" maxlength="80">`;
+          const inp = $("input", ttl); inp.value = t.name; inp.focus(); inp.select();
+          const done = (ok) => { if (ok) tplRename(t, inp.value); else renderTplList(); };
+          inp.onkeydown = (e) => { if (e.key === "Enter") done(true); else if (e.key === "Escape") done(false); };
+          inp.onblur = () => done(true);
+        } else if (a === "del") {
+          if (!b.dataset.confirm) { b.dataset.confirm = "1"; b.classList.add("confirm"); b.title = "Cliquez encore pour supprimer"; setTimeout(() => { delete b.dataset.confirm; b.classList.remove("confirm"); }, 3000); return; }
+          tplDelete(t);
+        }
+      }));
+    });
+  }
 
   async function prepareRowMatch() {
     const sel = await xl.selected();
@@ -3543,8 +3791,13 @@
     const n = (sel.values[0] || []).length;
     const heads = header ? sel.texts[0] : Array.from({ length: n }, (_, j) => "Colonne " + colLetters(sel.col + j));
     const first = sel.values[header ? 1 : 0] || [];
-    const old = S.rm.cols;
-    S.rm.cols = heads.map((h, j) => old[j] && old[j].name === String(h) ? old[j] : ({ name: String(h || "Colonne " + colLetters(sel.col + j)), required: false, fuzzy: false, partial: false, tol: typeof first[j] === "number" ? "0,01" : "" }));
+    const old = [...S.rm.cols, ...(S.rm.tplCols || [])];
+    const norm2 = (x) => norm(String(x || "")).replace(/\s+/g, " ").trim();
+    S.rm.cols = heads.map((h, j) => {
+      const name = String(h || "Colonne " + colLetters(sel.col + j));
+      const o = old.find((c) => norm2(c.name) === norm2(name));
+      return o ? { ...o, name } : { name, required: false, fuzzy: false, partial: false, tol: typeof first[j] === "number" ? "0,01" : "" };
+    });
     renderRowMatchCols();
     $("#rmInfo").textContent = `${sel.values.length - (header ? 1 : 0)} ligne(s) × ${n} colonne(s) sélectionnée(s) en ${sel.sheet}!${rangeA1(sel.row, sel.col, sel.values.length, n)}.`;
   }
@@ -3562,7 +3815,7 @@
     const sel = await xl.selected();
     const header = $("#rmHeader").checked, once = $("#rmOnce").checked;
     const n = (sel.values[0] || []).length;
-    if (S.rm.cols.length !== n) await prepareRowMatch();
+    if (S.rm.cols.length !== n || (header && S.rm.cols.some((c, j) => c.name !== String(sel.texts[0][j] || c.name)))) await prepareRowMatch();
     const cols = S.rm.cols;
     const off = header ? 1 : 0;
     const scope = $("#matchDoc").value;
@@ -4123,17 +4376,13 @@
     $$("input[name=mmode]").forEach((r) => (r.onchange = () => { const row = $("input[name=mmode]:checked").value === "row"; $("#rowMatchBox").hidden = !row; $("#cellMatchBox").hidden = row; }));
     $("#rmPrep").onclick = run(prepareRowMatch, "Préparation");
     $("#rmRun").onclick = run(runRowMatch, "Document Matching");
-    renderTplSelect("#rmTpl", "snipcompta.matchTpl");
+    renderTplSelect("#rmTpl", "match");
     $("#rmSave").onclick = () => {
-      const name = $("#rmTplName").value.trim(); if (!name) return status("Donnez un nom au modèle.", "warn");
-      const t = loadTpl("snipcompta.matchTpl"); t[name] = { header: $("#rmHeader").checked, once: $("#rmOnce").checked, cols: S.rm.cols };
-      saveTpl("snipcompta.matchTpl", t); renderTplSelect("#rmTpl", "snipcompta.matchTpl"); status(`Modèle « ${name} » enregistré sur ce PC.`, "ok");
+      const row = $("input[name=mmode]:checked").value === "row";
+      if (tplSave("match", $("#rmTplName").value, { mode: row ? "row" : "cell", abs: $("#matchAbs").checked, once: $("#matchOnce").checked, tol: $("#matchTol").value,
+        header: $("#rmHeader").checked, rmOnce: $("#rmOnce").checked, cols: S.rm.cols })) $("#rmTplName").value = "";
     };
-    $("#rmLoad").onclick = () => {
-      const t = loadTpl("snipcompta.matchTpl")[$("#rmTpl").value]; if (!t) return;
-      $("#rmHeader").checked = !!t.header; $("#rmOnce").checked = !!t.once; S.rm.cols = t.cols || []; renderRowMatchCols();
-      status("Modèle chargé. Sélectionnez une plage avec les mêmes colonnes puis lancez.", "ok");
-    };
+    $("#rmLoad").onclick = () => tplApply(tplFind($("#rmTpl").value));
     renderRowMatchCols();
     // automatisation
     $("#sumsDocBtn").onclick = run(findDocSums, "Recherche des sommes");
@@ -4142,18 +4391,16 @@
     $("#formClear").onclick = () => { S.form.fields = []; S.form.refDoc = null; S.form.rows = null; $("#formOut").innerHTML = ""; renderForm(); drawOverlay(); };
     $("#formPreview").onclick = run(formPreview, "Aperçu");
     $("#formExport").onclick = run(formExport, "Export");
-    renderTplSelect("#formTpl", "snipcompta.formTpl");
+    renderTplSelect("#formTpl", "form");
     $("#formSave").onclick = () => {
-      const name = $("#formTplName").value.trim(); if (!name || !S.form.fields.length) return status("Ajoutez des champs et donnez un nom au modèle.", "warn");
-      const t = loadTpl("snipcompta.formTpl"); t[name] = { mode: S.form.mode, fields: S.form.fields.map((f) => ({ ...f, id: undefined })) };
-      saveTpl("snipcompta.formTpl", t); renderTplSelect("#formTpl", "snipcompta.formTpl"); status(`Modèle « ${name} » enregistré sur ce PC.`, "ok");
+      if (!S.form.fields.length) return status("Ajoutez d'abord des champs.", "warn");
+      if (tplSave("form", $("#formTplName").value, { mode: S.form.mode, fields: S.form.fields })) $("#formTplName").value = "";
     };
-    $("#formLoad").onclick = () => {
-      const t = loadTpl("snipcompta.formTpl")[$("#formTpl").value]; if (!t) return;
-      S.form.mode = t.mode || "doc"; $("#formMode").value = S.form.mode;
-      S.form.fields = (t.fields || []).map((f) => ({ ...f, id: uid() })); S.form.refDoc = S.cur;
-      renderForm(); drawOverlay(); status("Modèle chargé : il sera appliqué à tous les documents cochés.", "ok");
-    };
+    $("#formLoad").onclick = () => tplApply(tplFind($("#formTpl").value));
+    // écran « Modèles »
+    $("#tplImport").onclick = () => $("#tplFile").click();
+    $("#tplFile").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) runAction(() => tplImportFile(f), { label: "Import impossible" }); };
+    $("#tplExportAll").onclick = () => { const all = tplAll(); if (!all.length) return status("Aucun modèle à exporter.", "warn"); tplExport(all, "Modèles SnipCompta.json"); };
     $("#formAll").onclick = () => $$("#formDocs input").forEach((i) => (i.checked = true));
     $("#invAll").onclick = () => $$("#invDocs input").forEach((i) => (i.checked = true));
     $("#invRun").onclick = run(() => runDocExtraction("invoice"), "Extraction");
@@ -4878,7 +5125,7 @@
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, lineSegments, tableDropCol, tableToggleCol, viewCols, OfficeXL, cleanSnip, normalizeMeta, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, tplSave, tplApply, tplAll, tplImportFile, tplPayload, tableTplData, lineSegments, tableDropCol, tableToggleCol, viewCols, OfficeXL, cleanSnip, normalizeMeta, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));
