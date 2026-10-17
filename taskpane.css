@@ -626,3 +626,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 .topbar .folderpick { flex: 0 1 auto; max-width: 34%; }
 .topbar .folderpick select { max-width: 100%; }
 @media (max-width: 480px) { .topbar .folderpick { max-width: 40%; } }
+/* v14 : icônes au trait de la barre d'outils (suivent le thème clair/sombre) */
+.modes button svg.tic { width: 20px; height: 20px; display: block; color: var(--ink); }
+@media (min-width: 620px) { .modes button svg.tic { width: 24px; height: 24px; } }
+.modes button.active svg.tic { color: var(--accent); }

@@ -52,7 +52,7 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261017-1941"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-2010"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
