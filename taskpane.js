@@ -42,13 +42,17 @@
   /* Utilitaires                                                            */
   /* ====================================================================== */
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const isNum = (v) => typeof v === "number" && isFinite(v);
+  const SAFE_ID = /^[\w.-]{1,120}$/;          // identifiants de pièces, snips, annotations
+  const HEX = /^#[0-9a-f]{6}$/i;
+  const safeId = (v) => v != null && SAFE_ID.test(String(v));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const norm = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261017-1512"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-1554"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
@@ -315,6 +319,7 @@
 
   async function ocrPage(doc, p, pg) {
     if (pg.ocrPromise) return pg.ocrPromise;
+    const gen = pg.ocrGen = (pg.ocrGen || 0) + 1;
     pg.ocrPromise = (async () => {
       const worker = await getOcr();
       S.ocrMsg = `Lecture du scan (OCR) — ${doc.name}, page ${p}…`;
@@ -329,7 +334,9 @@
       if (S.opts.ocrClean !== false) { await sleep(0); cleanForOcr(ctx, canvas.width, canvas.height); }
       let data;
       try { ({ data } = await Promise.race([worker.recognize(canvas), onCancel()])); }
+      catch (e) { if (pg.ocrGen !== gen) return; throw e; }       // lecture remplacée (moteur changé) : sans objet
       finally { S.ocrMsg = null; }
+      if (pg.ocrGen !== gen) return;                                 // une relecture a été demandée entre-temps
       pg.words = (data.words || []).filter((w) => w.text && w.text.trim() && w.confidence > 20)
         .map((w) => ({ str: w.text.trim(), x0: w.bbox.x0 / f, y0: w.bbox.y0 / f, x1: w.bbox.x1 / f, y1: w.bbox.y1 / f }));
       pg.lines = groupLines(pg.words);
@@ -534,7 +541,7 @@
         doc.pdf = await openPdfWithPassword(doc);
         doc.numPages = doc.pdf.numPages;
       } else {
-        const url = URL.createObjectURL(new Blob([doc.bytes], { type: doc.mime || "image/png" }));
+        const url = doc.imgUrl = URL.createObjectURL(new Blob([doc.bytes], { type: doc.mime || "image/png" }));
         doc.img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error("Image illisible")); im.src = url; });
         doc.numPages = 1;
       }
@@ -599,6 +606,7 @@
     const doc = S.docs.get(id);
     if (!doc) return;
     try { if (S.inOffice && doc.stored) await xl.deleteDoc(id); } catch (e) { status("Suppression impossible : " + e.message, "err"); return; }
+    releaseDoc(doc);
     S.docs.delete(id);
     if (S.cur === id) { S.cur = null; const first = S.docs.keys().next().value; if (first) await openDoc(first); else render(); }
     refreshDocUI();
@@ -608,10 +616,10 @@
   function refreshDocUI() {
     const sel = $("#docSelect"), ms = $("#matchDoc");
     const docs = [...S.docs.values()];
-    sel.innerHTML = docs.length ? docs.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("") : `<option value="">Aucun document</option>`;
+    sel.innerHTML = docs.length ? docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("") : `<option value="">Aucun document</option>`;
     document.body.classList.toggle("nodoc", !docs.length);
     if (S.cur) sel.value = S.cur;
-    const opts = docs.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
+    const opts = docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("");
     ms.innerHTML = `<option value="*">Tous les documents</option>` + opts;
     for (const id of ["#cmpA", "#cmpB"]) { const e = $(id); if (e) { const v = e.value; e.innerHTML = opts; if (v && S.docs.has(v)) e.value = v; } }
     renderDocList();
@@ -890,7 +898,7 @@
       }
       if (drag.kind === "sep") {
         const t = S.table; if (!t) return;
-        t.seps[drag.idx] = clamp(pt.x, t.rect.x0 + 2, t.rect.x1 - 2);
+        t.seps[drag.idx] = clamp(pt.x, t.rect.x0 + 2, t.rect.x1 - 2); t.manual = true;
         drag.el.style.left = (t.seps[drag.idx] - t.rect.x0) * S.scale + "px";
         throttledPreview();
         return;
@@ -922,7 +930,7 @@
     host.addEventListener("pointerup", end);
     host.addEventListener("pointercancel", () => { if (drag && drag.kind === "resize") drawOverlay(); else if (drag && drag.el) drag.el.remove(); drag = null; hideLive(); });
     host.addEventListener("dblclick", (e) => {
-      if (e.target.classList.contains("sep") && S.table) { S.table.seps.splice(+e.target.dataset.i, 1); drawOverlay(); updateTablePreview(); }
+      if (e.target.classList.contains("sep") && S.table) { S.table.seps.splice(+e.target.dataset.i, 1); S.table.manual = true; drawOverlay(); updateTablePreview(); }
     });
     const v = $("#viewer");
     let st = null;
@@ -943,7 +951,7 @@
     if (extraClick(pt)) return;
     const t = S.table;
     if (t && t.docId === doc.id && t.page === S.page && pt.x > t.rect.x0 && pt.x < t.rect.x1 && pt.y > t.rect.y0 && pt.y < t.rect.y1) {
-      if (!t.seps.some((x) => Math.abs(x - pt.x) * S.scale < 6)) { t.seps.push(pt.x); t.seps.sort((a, b) => a - b); drawOverlay(); updateTablePreview(); }
+      if (!t.seps.some((x) => Math.abs(x - pt.x) * S.scale < 6)) { t.seps.push(pt.x); t.seps.sort((a, b) => a - b); t.manual = true; drawOverlay(); updateTablePreview(); }
       return;
     }
     if (CLICK_MODES.has(S.mode)) { queueClickSnip(pt, ev); return; }
@@ -1001,6 +1009,17 @@
     if (!text) return status(pg.needsOcr && !S.opts.ocr ? "Page scannée : activez l'OCR dans les réglages." : "Aucun texte dans la zone sélectionnée.", "warn");
     const tv = typed(text);
     await placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...tightBox(ws, r) }], tv.f);
+    // plusieurs lignes bien alignées en colonnes : on propose de les mettre en tableau (une valeur par cellule)
+    const nl = groupLines(ws).length;
+    if (nl >= 2 && autoColumns(ws, r).length >= 1) {
+      const id = S.selSnip, sn = S.snips.get(id);
+      status(`Cette zone ressemble à un tableau (${nl} lignes).`, "ok", [{ label: "Insérer en tableau", fn: () => runAction(async () => {
+        const rc = sn && parseA1(sn.address);
+        if (sn) await deleteSnips([id], { clear: true });
+        if (rc) await xl.select(sn.sheet, rc.row, rc.col);
+        setMode("table"); await startTable(r, p);
+      }, { label: "Tableau impossible" }) }]);
+    }
   }
 
   async function doMarkSnip(type, r) {
@@ -1121,47 +1140,129 @@
   }
 
   /* ---------------- Table Snip ----------------------------------------- */
+  /* ---- Tableaux sans traits : on raisonne par blocs de mots (cellules) alignés ---- */
+  const medianH = (words) => { const hs = words.map((w) => w.y1 - w.y0).sort((a, b) => a - b); return hs.length ? hs[hs.length >> 1] : 9; };
+  /** Blocs d'une ligne : mots séparés par un vrai blanc (≥ 0,6 × hauteur), montant collé à un libellé détaché,
+   *  et coupure aux séparateurs qui tombent entre deux mots. */
+  function lineSegments(L, h, seps, manual) {
+    const ws = [...L.words].sort((a, b) => a.x0 - b.x0);
+    const out = []; let cur = [];
+    const cutAt = (prev, w) => {
+      const gap = w.x0 - prev.x1;
+      // « 1 362,61 » : un scan écarte souvent le « 1 » du reste du montant
+      if (gap < 1.4 * h && /^[-−(+]?\d{1,3}$/.test(prev.str) && /^\d{3}([.,  ]\d{3})*([.,]\d{1,2})?\)?[-−]?$/.test(w.str)) return false;
+      if (gap >= 0.6 * h) return true;
+      if (seps && seps.length && (manual || gap >= 0.36 * h)) return seps.some((x) => x >= prev.x1 - 0.5 && x <= w.x0 + 0.5);
+      return false;
+    };
+    for (let i = 0; i < ws.length; i++) {
+      if (cur.length && cutAt(ws[i - 1], ws[i])) { out.push(cur); cur = []; }
+      cur.push(ws[i]);
+    }
+    if (cur.length) out.push(cur);
+    const segs = [];
+    for (const g of out) {
+      // « …POUR LOYER1 606,38 » : le montant final est détaché du libellé
+      let parts = [g];
+      for (let k = Math.max(1, g.length - 4); k < g.length; k++) {
+        const tail = g.slice(k).map((w) => w.str).join(" ");
+        if (parseAmount(tail) != null && /[.,]\d{1,2}\)?[-−]?$/.test(tail) && /[A-Za-zÀ-ÿ]/.test(g.slice(0, k).map((w) => w.str).join(" "))) { parts = [g.slice(0, k), g.slice(k)]; break; }
+      }
+      for (const ws2 of parts) {
+        const text = joinWords(ws2), v = parseAmount(text);
+        segs.push({ words: ws2, text, num: v != null && /[.,]\d{1,2}\)?\s?[-−]?$/.test(text.replace(/\s?(€|EUR)$/i, "")),
+          x0: Math.min(...ws2.map((w) => w.x0)), x1: Math.max(...ws2.map((w) => w.x1)) });
+      }
+    }
+    return segs;
+  }
+  /** Colonnes d'un tableau sans traits : alignements à gauche (textes) et à droite (montants) répétés d'une ligne à l'autre. */
   function autoColumns(words, r) {
+    const lines = groupLines(words); if (!lines.length) return [];
+    const h = medianH(words);
+    const segLines = lines.map((L) => lineSegments(L, h));
     const n = Math.max(1, Math.ceil(r.x1 - r.x0));
-    const cov = new Uint16Array(n);
-    for (const w of words) {
-      const a = clamp(Math.floor(w.x0 - r.x0), 0, n - 1), b = clamp(Math.ceil(w.x1 - r.x0), 0, n - 1);
-      for (let i = a; i <= b; i++) cov[i]++;
-    }
-    const nLines = groupLines(words).length;
-    const tol = Math.floor(nLines * 0.06);
-    // écart minimal entre deux colonnes, proportionnel à la taille du texte
-    // (une image scannée compte en pixels, pas en points : « 1 590,07 » ne doit pas être coupé)
-    const hs = words.map((w) => w.y1 - w.y0).sort((a, b) => a - b);
-    const minGap = Math.max(6, 0.62 * (hs.length ? hs[hs.length >> 1] : 9));
-    let first = 0, last = n - 1;
-    while (first < n && cov[first] <= tol) first++;
-    while (last > 0 && cov[last] <= tol) last--;
+    const cov = new Uint16Array(n), at = (x) => clamp(Math.round(x - r.x0), 0, n - 1);
+    for (const sl of segLines) for (const sg of sl) if (/[A-Za-zÀ-ÿ0-9]/.test(sg.text)) for (let i = at(sg.x0); i <= at(sg.x1); i++) cov[i]++;
+    // 1) blancs verticaux complets (aucun bloc ne les traverse) : toujours des séparations
     const seps = [];
-    let i = first;
+    let i = at(Math.min(...words.map((w) => w.x0))), last = at(Math.max(...words.map((w) => w.x1)));
     while (i <= last) {
-      if (cov[i] <= tol) {
-        let j = i; while (j <= last && cov[j] <= tol) j++;
-        if (j - i >= minGap) seps.push(r.x0 + (i + j) / 2);
-        i = j;
-      } else i++;
+      if (!cov[i]) { let j = i; while (j <= last && !cov[j]) j++; if (j - i >= Math.max(4, 0.5 * h)) seps.push(r.x0 + (i + j) / 2); i = j; } else i++;
     }
-    return seps;
+    // 2) colonnes par alignement : départs de textes, fins de montants
+    const minSup = lines.length >= 4 ? 2 : 1, tolA = Math.max(4, 0.9 * h);
+    const clusters = [];
+    for (const side of ["L", "R"]) {
+      const an = [];
+      segLines.forEach((sl, li) => sl.forEach((sg) => {
+        if (!/[A-Za-zÀ-ÿ0-9]/.test(sg.text)) return;            // tirets, taches d'OCR : pas une colonne
+        if ((side === "R") === sg.num) an.push({ x: side === "R" ? sg.x1 : sg.x0, li, sg });
+      }));
+      an.sort((a, b) => a.x - b.x);
+      let g = [];
+      const flush = () => {
+        if (!g.length) return;
+        if (new Set(g.map((a) => a.li)).size >= minSup) {
+          const xs = g.map((a) => a.x).sort((a, b) => a - b), q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(f * arr.length))];
+          const x0s = g.map((a) => a.sg.x0).sort((a, b) => a - b), x1s = g.map((a) => a.sg.x1).sort((a, b) => a - b);
+          // étendue « typique » (un libellé exceptionnellement long ne doit pas avaler la colonne voisine)
+          clusters.push({ side, anchor: xs[xs.length >> 1], min: side === "L" ? x0s[0] : q(x0s, 0.5), max: side === "R" ? x1s[x1s.length - 1] : q(x1s, 0.5), sMin: x0s[0] });
+        }
+        g = [];
+      };
+      for (const a of an) { if (g.length && a.x - g[g.length - 1].x > tolA) flush(); g.push(a); }
+      flush();
+    }
+    // un même bloc de colonne vu des deux côtés (textes et montants mêlés) : fusion
+    clusters.sort((a, b) => (a.min + a.max) / 2 - (b.min + b.max) / 2);
+    for (let k = 0; k + 1 < clusters.length;) {
+      const A = clusters[k], B = clusters[k + 1], ov = Math.min(A.max, B.max) - Math.max(A.min, B.min);
+      if (A.side !== B.side && ov > 0.5 * Math.min(A.max - A.min, B.max - B.min)) {
+        clusters.splice(k, 2, { side: A.side, anchor: A.anchor, min: Math.min(A.min, B.min), max: Math.max(A.max, B.max), sMin: Math.min(A.sMin, B.sMin) });
+      } else k++;
+    }
+    // séparation entre deux colonnes voisines : là où le moins de blocs passent (sans couper un libellé entre deux mots)
+    const gapHits = (x) => {
+      let n2 = 0;
+      for (const sl of segLines) for (const sg of sl) {
+        if (x <= sg.x0 || x >= sg.x1) continue;
+        const ws = sg.words;
+        for (let q = 1; q < ws.length; q++) if (x > ws[q - 1].x1 && x < ws[q].x0 && ws[q].x0 - ws[q - 1].x1 >= 0.36 * h) n2++;
+      }
+      return n2;
+    };
+    for (let k = 0; k + 1 < clusters.length; k++) {
+      const A = clusters[k], B = clusters[k + 1];
+      let a = A.side === "R" ? A.anchor : A.anchor + 1, b = B.side === "L" ? B.anchor : B.sMin;
+      if (b - a < 2) { a = Math.min(a, b - 2); }
+      if (seps.some((x) => x > a - 1 && x < b + 1)) continue;          // déjà séparées par un blanc complet
+      let best = null;
+      for (let x = Math.ceil(a); x <= Math.floor(b); x++) {
+        const c = cov[at(x)] * 4 + gapHits(x);
+        if (!best || c < best.c) best = { c, x0: x, x1: x }; else if (c === best.c && best.x1 === x - 1) best.x1 = x;
+      }
+      if (best) seps.push((best.x0 + best.x1) / 2);
+    }
+    return [...new Set(seps.map((x) => Math.round(x * 10) / 10))].sort((a, b) => a - b).filter((x, k2, arr) => !k2 || x - arr[k2 - 1] > 0.6 * h);
   }
 
-  function extractTable(pg, rect, seps, merge) {
+  function extractTable(pg, rect, seps, merge, manual) {
     const words = wordsInRect(pg.words, rect);
     const lines = groupLines(words);
-    const cols = [rect.x0, ...[...seps].sort((a, b) => a - b), rect.x1];
+    const h = medianH(words);
+    const ss = [...seps].sort((a, b) => a - b);
+    const cols = [rect.x0, ...ss, rect.x1];
     const nc = cols.length - 1;
+    const colOf = (x) => { let k = cols.findIndex((c, idx) => idx > 0 && x < c) - 1; if (k < 0) k = nc - 1; return clamp(k, 0, nc - 1); };
     const rows = [];
     for (const L of lines) {
       const buckets = Array.from({ length: nc }, () => []);
-      for (const w of L.words) {
-        const xc = (w.x0 + w.x1) / 2;
-        let k = cols.findIndex((x, idx) => idx > 0 && xc < x) - 1;
-        if (k < 0) k = nc - 1;
-        buckets[clamp(k, 0, nc - 1)].push(w);
+      for (const sg of lineSegments(L, h, ss, manual)) {
+        const ka = colOf(sg.x0 + 0.5), kb = colOf(sg.x1 - 0.5);
+        // bloc à cheval sur une séparation : un texte reste dans la colonne où il commence, un montant dans celle où il finit
+        const k = ka === kb ? colOf((sg.x0 + sg.x1) / 2) : sg.num ? kb : ka;
+        buckets[k].push(...sg.words);
       }
       const cells = buckets.map(joinWords);
       const row = { cells, y0: L.y0, y1: L.y1, x0: rect.x0, x1: rect.x1 };
@@ -1194,7 +1295,7 @@
     t.excl = t.excl || new Set();
     const doc = S.docs.get(t.docId);
     const pg = doc.pages[t.page];
-    const rows = extractTable(pg, t.rect, t.seps, S.opts.mergeRows);
+    const rows = extractTable(pg, t.rect, t.seps, S.opts.mergeRows, t.manual);
     t.rows = rows;
     t.rowYs = rows.slice(1).map((r) => r.y0 - 1);
     const nc = t.seps.length + 1;
@@ -1218,10 +1319,10 @@
       $("#tTo").onchange = (e) => { t.to = clamp(+e.target.value || t.page, 1, doc.numPages); };
     }
     $$("[data-row]", panel).forEach((b) => (b.onclick = () => { const k = rowKey(t.page, rows[+b.dataset.row]); if (t.excl.has(k)) t.excl.delete(k); else t.excl.add(k); updateTablePreview(); }));
-    $$("[data-merge]", panel).forEach((b) => (b.onclick = () => { t.seps.sort((a, b2) => a - b2).splice(+b.dataset.merge, 1); updateTablePreview(); }));
+    $$("[data-merge]", panel).forEach((b) => (b.onclick = () => { t.seps.sort((a, b2) => a - b2).splice(+b.dataset.merge, 1); t.manual = true; updateTablePreview(); }));
     $("#tMerge").onchange = (e) => { S.opts.mergeRows = e.target.checked; saveOpts(); updateTablePreview(); };
     $("#tInsert").onclick = () => runAction(insertTable, { label: "Insertion du tableau impossible" });
-    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); updateTablePreview(); };
+    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; updateTablePreview(); };
     $("#tCancel").onclick = () => { S.table = null; drawOverlay(); updateTablePreview(); };
     drawOverlay();
   }
@@ -1234,7 +1335,7 @@
     for (let p = from; p <= to; p++) {
       if (to > from) status(`Extraction du tableau — page ${p - from + 1}/${to - from + 1}…`, "busy");
       const pg = await pageText(doc, p, { allowOcr: true });
-      for (const r of extractTable(pg, t.rect, t.seps, S.opts.mergeRows)) if (!(t.excl && t.excl.has(rowKey(p, r)))) all.push({ ...r, page: p });
+      for (const r of extractTable(pg, t.rect, t.seps, S.opts.mergeRows, t.manual)) if (!(t.excl && t.excl.has(rowKey(p, r)))) all.push({ ...r, page: p });
     }
     if (!all.length) return status("Aucune ligne à insérer.", "warn");
     const nc = t.seps.length + 1;
@@ -1370,7 +1471,7 @@
       const li = document.createElement("li");
       li.className = "click";
       li.innerHTML = `<span class="chip" style="background:${r.ok ? STYLE.sum.color : STYLE.except.color}">${r.ok ? "Σ" : "✗"}</span>
-        <div class="grow"><div class="ttl">${esc(sel.sheet)}!${r.addr} — ${esc(fmtVal(r.raw))}</div>
+        <div class="grow"><div class="ttl">${esc(sel.sheet)}!${esc(r.addr)} — ${esc(fmtVal(r.raw))}</div>
         <div class="sub">${r.ok ? `somme de ${r.n} montants · ${esc(r.sn.docName)} · page ${r.sn.rects[0].page}` : "aucune suite de montants ne donne ce total"}</div></div>`;
       li.onclick = r.ok ? () => goToSnip(r.sn) : () => xl.selectAddr(sel.sheet, r.addr).catch(() => {});
       ul.appendChild(li);
@@ -1510,7 +1611,7 @@
     for (const sn of all.slice(0, 500)) {
       const st = STYLE[sn.type];
       const li = document.createElement("li");
-      li.innerHTML = `<span class="chip" style="background:${st.color}">${st.label}</span>
+      li.innerHTML = `<span class="chip" style="background:${st.color}">${esc(st.label)}</span>
         <div class="grow click"><div class="ttl">${esc(sn.sheet)}!${esc(sn.address)} — ${esc(fmtVal(sn.value))}</div>
         <div class="sub">${esc(sn.docName)} · p. ${sn.rects[0].page}${sn.auto ? " · rapprochement" : ""}</div></div>
         <button class="danger" title="Supprimer le lien (la valeur reste dans la cellule)">×</button>`;
@@ -1647,7 +1748,7 @@
         const li = document.createElement("li");
         li.className = r.ok ? "click" : "";
         li.innerHTML = `<span class="chip" style="background:${r.ok ? STYLE.valid.color : STYLE.except.color}">${r.ok ? "✓" : "✗"}</span>
-          <div class="grow"><div class="ttl">${esc(sel.sheet)}!${r.addr} — ${esc(fmtVal(r.raw))}</div>
+          <div class="grow"><div class="ttl">${esc(sel.sheet)}!${esc(r.addr)} — ${esc(fmtVal(r.raw))}</div>
           <div class="sub">${r.ok ? esc(r.sn.docName) + " · page " + r.sn.rects[0].page : "introuvable dans les documents"}</div></div>`;
         if (r.ok) li.onclick = () => goToSnip(r.sn);
         else li.onclick = () => xl.selectAddr(sel.sheet, r.addr).catch(() => {});
@@ -1844,11 +1945,19 @@
     async saveSnips(arr, meta) {
       return Excel.run(async (ctx) => {
         const ws = await ensureSheet(ctx, DATA_SHEET);
-        ws.getRange().clear();
+        // on écrit par-dessus l'ancienne version, puis on efface ce qui dépasse :
+        // la feuille n'est jamais vide, une coupure en cours d'enregistrement ne perd pas les liens
+        const ur = ws.getUsedRangeOrNullObject(true); ur.load("rowIndex,rowCount");
+        await ctx.sync();
+        const oldRows = ur.isNullObject ? 0 : ur.rowIndex + ur.rowCount;
         const mj = JSON.stringify(meta || {});
         const metaRows = [];
         for (let i = 0, k = 0; i < Math.max(1, mj.length); i += CHUNK, k++) metaRows.push(["__meta__" + k, mj.slice(i, i + CHUNK)]);
-        const rows = [["id", "json"], ...metaRows, ...arr.map((s) => [s.id, JSON.stringify(s)])];
+        const json = (sn) => {
+          const j = JSON.stringify(sn);     // une cellule Excel contient 32 767 caractères au plus
+          return j.length > CHUNK ? JSON.stringify({ ...sn, value: String(sn.value).slice(0, 2000), cellVals: null }) : j;
+        };
+        const rows = [["id", "json"], ...metaRows, ...arr.map((sn) => [sn.id, json(sn)])];
         for (let i = 0; i < rows.length; i += 500) {
           const part = rows.slice(i, i + 500);
           const rg = ws.getRangeByIndexes(i, 0, part.length, 2);
@@ -1856,6 +1965,7 @@
           rg.values = part;
           await ctx.sync();
         }
+        if (oldRows > rows.length) { ws.getRangeByIndexes(rows.length, 0, oldRows - rows.length, 2).clear(); await ctx.sync(); }
       });
     },
     async loadSnips() {
@@ -1903,6 +2013,7 @@
           await ctx.sync();
           onProgress && onProgress(Math.round(((i + part.length) / chunks.length) * 100));
         }
+        return start;
       });
     },
     async listDocs() {
@@ -1916,7 +2027,7 @@
         const rg = ws.getRangeByIndexes(0, 0, ur.rowIndex + ur.rowCount, 5); rg.load("values");
         await ctx.sync();
         const seen = new Map();
-        for (const [id, name, mime] of rg.values) if (id && !seen.has(id)) seen.set(id, { id, name: String(name).replace(/^~/, ""), mime });
+        for (const [id, name, mime] of rg.values) if (id && safeId(id) && !seen.has(id)) seen.set(id, { id: String(id), name: String(name).replace(/^~/, ""), mime: String(mime || "") });
         return [...seen.values()];
       });
     },
@@ -1937,20 +2048,38 @@
         if (ws.isNullObject) return null;
         const rows = await OfficeXL._rowsOf(ctx, ws, id);
         if (!rows) return null;
-        const rg = ws.getRangeByIndexes(rows.r1, 3, rows.r2 - rows.r1 + 1, 3); rg.load("values");
+        const rg = ws.getRangeByIndexes(rows.r1, 0, rows.r2 - rows.r1 + 1, 6); rg.load("values");
         await ctx.sync();
-        const parts = rg.values.slice().sort((a, b) => a[0] - b[0]).map((r) => String(r[2]).replace(/^~/, ""));
-        return fromB64(parts.join(""));
+        // morceaux de CE document seulement ; chaque écriture repart du morceau 0 : on garde la dernière écriture complète
+        // (un réessai interrompu ou une ancienne version restée après une coupure sont ignorés)
+        const runs = []; let cur = null;
+        for (const r of rg.values) {
+          if (r[0] !== id) continue;
+          const k = +r[3];
+          if (k === 0 || !cur) { cur = { total: +r[4] || 0, parts: new Map() }; runs.push(cur); }
+          if (!cur.parts.has(k)) cur.parts.set(k, String(r[5]).replace(/^~/, ""));
+        }
+        const ok = runs.reverse().find((x) => x.total > 0 && x.parts.size >= x.total && Array.from({ length: x.total }, (_, i) => x.parts.has(i)).every(Boolean));
+        if (!ok) throw new Error("Une partie de cette pièce manque dans le classeur : réimportez-la.");
+        return fromB64(Array.from({ length: ok.total }, (_, i) => ok.parts.get(i)).join(""));
       });
     },
-    async deleteDoc(id) {
+    async deleteDoc(id, opts = {}) {
       return Excel.run(async (ctx) => {
         const ws = ctx.workbook.worksheets.getItemOrNullObject(DOCS_SHEET);
         await ctx.sync();
         if (ws.isNullObject) return;
         const rows = await OfficeXL._rowsOf(ctx, ws, id);
         if (!rows) return;
-        ws.getRangeByIndexes(rows.r1, 0, rows.r2 - rows.r1 + 1, 6).delete("Up");
+        // seulement les lignes de ce document (jamais celles d'une pièce intercalée), du bas vers le haut
+        const col = ws.getRangeByIndexes(rows.r1, 0, rows.r2 - rows.r1 + 1, 1); col.load("values");
+        await ctx.sync();
+        const runs = [];
+        col.values.forEach(([v], i) => {
+          const r = rows.r1 + i; if (v !== id || (opts && opts.before != null && r >= opts.before)) return;
+          const L = runs[runs.length - 1]; if (L && r === L[1] + 1) L[1] = r; else runs.push([r, r]);
+        });
+        for (const [a, b] of runs.reverse()) ws.getRangeByIndexes(a, 0, b - a + 1, 6).delete("Up");
         await ctx.sync();
       });
     },
@@ -2111,7 +2240,7 @@
   function rereadScans() {
     let n = 0;
     for (const d of S.docs.values()) for (const pg of Object.values(d.pages || {})) {
-      if (pg && pg.needsOcr && (pg.ocrDone || pg.ocrPromise)) { pg.ocrDone = false; pg.ocrPromise = null; pg.words = []; pg.lines = []; n++; }
+      if (pg && pg.needsOcr && (pg.ocrDone || pg.ocrPromise)) { pg.ocrGen = (pg.ocrGen || 0) + 1; pg.ocrDone = false; pg.ocrPromise = null; pg.words = []; pg.lines = []; n++; }
     }
     status(S.opts.ocrBest ? "Lecture précise activée" + (n ? " : les scans ouverts vont être relus." : ".") : "Lecture standard rétablie" + (n ? " : les scans ouverts vont être relus." : "."), "ok");
     if (n) { const pe = $("#pages"); if (pe) pe.dataset.key = ""; render(); }
@@ -2205,24 +2334,50 @@
 
   async function reloadSnips() {
     const res = await xl.loadSnips();
-    const list = Array.isArray(res) ? res : res.list;
+    const list = (Array.isArray(res) ? res : (res && res.list)) || [];
     if (res && res.meta) { S.meta = normalizeMeta(res.meta); applyDocMeta(); }
     S.snips.clear();
-    for (const sn of list) S.snips.set(sn.id, sn);
+    for (const raw of list) { const sn = cleanSnip(raw); if (sn) S.snips.set(sn.id, sn); }
     refreshSnipList(); drawOverlay();
+  }
+  /* Ce qui vient du classeur (ou d'un classeur reçu) est vérifié : types, nombres, identifiants, couleurs. */
+  function cleanRect(r) {
+    if (!r || typeof r !== "object" || !["x0", "y0", "x1", "y1"].every((k) => isNum(r[k]))) return null;
+    const out = { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1, page: Math.max(1, Math.round(+r.page || 1)) };
+    if (safeId(r.docId)) out.docId = String(r.docId);
+    return out;
+  }
+  function cleanSnip(sn) {
+    if (!sn || typeof sn !== "object" || !safeId(sn.id)) return null;
+    const out = { ...sn, id: String(sn.id) };
+    if (!SNIP_TYPES.includes(out.type)) out.type = "text";
+    out.sheet = String(sn.sheet ?? "");
+    out.address = String(sn.address ?? "");
+    if (!/^[A-Z$0-9:]{2,40}$/i.test(out.address)) return null;
+    out.docId = safeId(sn.docId) ? String(sn.docId) : "";
+    out.docName = String(sn.docName ?? "");
+    out.rects = (Array.isArray(sn.rects) ? sn.rects : []).map(cleanRect).filter(Boolean);
+    if (typeof out.value !== "number") out.value = out.value == null ? "" : String(out.value);
+    if (!isNum(out.created)) out.created = 0;
+    out.group = safeId(sn.group) ? String(sn.group) : out.id;
+    return out;
   }
 
   /* ====================================================================== */
   /* V2 — organiseur, annotations, automatisations                          */
   /* ====================================================================== */
+  const MARK_KINDS = ["highlight", "redact", "text", "check", "cross", "arrow"];
   function normalizeMeta(m) {
     m = m && typeof m === "object" ? m : {};
-    return {
-      markups: Array.isArray(m.markups) ? m.markups : [],
-      notes: Array.isArray(m.notes) ? m.notes : [],
-      docMeta: m.docMeta && typeof m.docMeta === "object" ? m.docMeta : {},
-      folders: Array.isArray(m.folders) ? m.folders : [],
-    };
+    const okDoc = (x) => x && typeof x === "object" && safeId(x.docId);
+    const idOf = (x) => (safeId(x.id) ? String(x.id) : uid());
+    const markups = (Array.isArray(m.markups) ? m.markups : []).filter((x) => okDoc(x) && ["x0", "y0", "x1", "y1"].every((k) => isNum(x[k])) && MARK_KINDS.includes(x.kind))
+      .map((x) => ({ ...x, id: idOf(x), docId: String(x.docId), page: Math.max(1, Math.round(+x.page || 1)), color: HEX.test(String(x.color)) ? x.color : "#FFD400", ...(x.text != null ? { text: String(x.text) } : {}) }));
+    const notes = (Array.isArray(m.notes) ? m.notes : []).filter((x) => okDoc(x) && isNum(x.x) && isNum(x.y))
+      .map((x) => ({ ...x, id: idOf(x), docId: String(x.docId), page: Math.max(1, Math.round(+x.page || 1)), text: String(x.text ?? "") }));
+    const docMeta = {};
+    if (m.docMeta && typeof m.docMeta === "object") for (const [k, v] of Object.entries(m.docMeta)) if (SAFE_ID.test(k) && v && typeof v === "object") docMeta[k] = { ...(v.name != null ? { name: String(v.name) } : {}), folder: String(v.folder ?? "") };
+    return { markups, notes, docMeta, folders: (Array.isArray(m.folders) ? m.folders : []).map(String) };
   }
   S.meta = normalizeMeta(null);
   Object.assign(S, { markTool: "highlight", markColor: "#FFD400", selMarkup: null, selNote: null, diffMarks: [], sumMarks: [],
@@ -2259,7 +2414,7 @@
   function loadStyles() {
     try {
       const s = JSON.parse(localStorage.getItem("snipcompta.styles") || "{}");
-      for (const k of Object.keys(s)) if (STYLE[k] && k !== "head") Object.assign(STYLE[k], { fill: s[k].fill, font: s[k].font });
+      for (const k of Object.keys(s)) if (STYLE[k] && k !== "head" && s[k] && HEX.test(s[k].fill) && HEX.test(s[k].font)) Object.assign(STYLE[k], { fill: s[k].fill, font: s[k].font });
     } catch (_) { /* stockage indisponible */ }
   }
   function saveStyles() {
@@ -2386,7 +2541,7 @@
     const nSn = [...S.snips.values()].filter((s) => s.rects.some((r) => (r.docId || s.docId) === d.id)).length;
     const p1 = d.pages && d.pages[1];
     const txt = p1 ? (p1.needsOcr ? (p1.ocrDone ? "scan lu (OCR)" : "scan sans texte") : "") : "";
-    const ext = (/\.([a-z0-9]{2,4})$/i.exec(d.name) || [, d.kind === "pdf" ? "pdf" : "img"])[1].toUpperCase();
+    const ext = (/\.([a-z0-9]{2,4})$/i.exec(d.name) || [null, d.kind === "pdf" ? "pdf" : "img"])[1].toUpperCase();
     const meta = [d.numPages ? d.numPages + (d.numPages > 1 ? " pages" : " page") : "", nSn ? nSn + (nSn > 1 ? " snips" : " snip") : "aucun snip", d.stored ? "" : "non enregistré dans le classeur", txt].filter(Boolean).join(", ");
     li.innerHTML = `<span class="fico" data-ext="${esc(ext)}">${esc(ext.slice(0, 3))}</span>
       <div class="grow click"><div class="ttl">${esc(d.name)}</div><div class="sub">${esc(meta)}</div></div>
@@ -2421,13 +2576,21 @@
     return li;
   }
 
+  /** Libère la mémoire d'une pièce (PDF ouvert, image décodée). */
+  function releaseDoc(doc) {
+    if (doc.pdf) { try { doc.pdf.destroy(); } catch (_) { /* déjà fermé */ } }
+    if (doc.imgUrl) { try { URL.revokeObjectURL(doc.imgUrl); } catch (_) { /* ignore */ } }
+    doc.pdf = null; doc.img = null; doc.imgUrl = null; doc.ready = null; doc.pages = {}; doc.dims = null; doc.rev = (doc.rev || 0) + 1;
+  }
   async function replaceDocBytes(doc, bytes, mime) {
+    releaseDoc(doc);
     doc.bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (mime) doc.mime = mime;
-    doc.pdf = null; doc.img = null; doc.ready = null; doc.pages = {}; doc.dims = null; doc.rev = (doc.rev || 0) + 1;
     if (S.inOffice && doc.stored) {
-      await xl.deleteDoc(doc.id);
-      await xl.saveDoc(doc, (pct) => status(`Mise à jour de « ${doc.name} » dans le classeur… ${pct} %`, "saving"));
+      // d'abord la nouvelle version, ensuite seulement l'ancienne est retirée : une coupure ne fait pas perdre la pièce
+      const start = await xl.saveDoc(doc, (pct) => status(`Mise à jour de « ${doc.name} » dans le classeur… ${pct} %`, "saving"));
+      if (isNum(start)) await xl.deleteDoc(doc.id, { before: start });
+      else { await xl.deleteDoc(doc.id); await xl.saveDoc(doc); }   // position inconnue : on réécrit proprement
     }
     await openDocData(doc);
     if (S.cur === doc.id) { S.page = clamp(S.page, 1, doc.numPages); await render(); }
@@ -2611,7 +2774,7 @@
   }
   async function onDocChanged(id) {
     const d = S.docs.get(id); if (!d) return;
-    d.bytes = null; d.pdf = null; d.img = null; d.ready = null; d.pages = {}; d.dims = null; d.rev = (d.rev || 0) + 1;
+    if (d.stored) { releaseDoc(d); d.bytes = null; }   // pièce non enregistrée dans le classeur : on garde la copie en mémoire
     try { await reloadSnips(); } catch (_) { /* ignore */ }
     if (S.cur === id) await render(); else drawOverlay();
     refreshSnipList();
@@ -3485,7 +3648,7 @@
     const prev = new Set($$(`#${containerId} input:checked`).map((i) => i.value));
     const fresh = !box.dataset.init;
     box.dataset.init = "1";
-    box.innerHTML = [...S.docs.values()].map((d) => `<label class="chk"><input type="checkbox" value="${d.id}" ${fresh || prev.has(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("") || `<div class="hint">Aucun document importé.</div>`;
+    box.innerHTML = [...S.docs.values()].map((d) => `<label class="chk"><input type="checkbox" value="${esc(d.id)}" ${fresh || prev.has(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("") || `<div class="hint">Aucun document importé.</div>`;
   }
   function renderAutoDocs() { renderDocChecks("formDocs"); renderDocChecks("invDocs"); }
   function renderForm() {
@@ -3961,8 +4124,9 @@
         res = b ? toB64(b) : null;
       } else if (op === "saveDoc") {
         const d = args[0];
-        await HUBXL.saveDoc({ id: d.id, name: d.name, mime: d.mime, bytes: fromB64(d.b64) });
-        res = true;
+        res = await HUBXL.saveDoc({ id: d.id, name: d.name, mime: d.mime, bytes: fromB64(d.b64) });
+        const hd = S.docs.get(d.id);                         // le panneau garde la même version que la fenêtre
+        if (hd) { releaseDoc(hd); hd.bytes = fromB64(d.b64); hd.mime = d.mime; }
       } else if (typeof HUBXL[op] === "function") res = await HUBXL[op](...args);
       else throw new Error("opération inconnue : " + op);
       reply({ ok: true, res: res === undefined ? null : res });
@@ -4024,7 +4188,13 @@
   function rcall(op, args) {
     return new Promise((resolve, reject) => {
       const id = uid();
-      pending.set(id, { resolve, reject });
+      const ms = /saveDoc|hubDocBytes/.test(op) ? 300000 : 90000;
+      const t = setTimeout(() => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        reject(new Error("Le panneau SnipCompta d'Excel ne répond pas. Vérifiez qu'il est toujours ouvert (onglet SNIPCOMPTA), puis réessayez."));
+      }, ms);
+      pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
       parentSend({ id, op, args });
     });
   }
@@ -4206,12 +4376,12 @@
   /* ====================================================================== */
   /* Tableau détecté en un clic                                             */
   /* ====================================================================== */
-  function lineSegments(L) {
+  function segCount(L) {
     let n = 1;
     for (let i = 1; i < L.words.length; i++) if (L.words[i].x0 - L.words[i - 1].x1 > Math.max(6, 1.1 * L.h)) n++;
     return n;
   }
-  const isTabular = (L) => lineSegments(L) >= 2 || findAmounts(L.text).some((a) => a.hasDec);
+  const isTabular = (L) => segCount(L) >= 2 || findAmounts(L.text).some((a) => a.hasDec);
   function tableRectAt(pg, pt) {
     pg._tbl = pg._tbl || new Map();
     const lines = pg.lines || [];
@@ -4280,12 +4450,19 @@
     if (op.cancelled) return Promise.reject(cancelErr());
     return new Promise((_, rej) => op.hooks.push(() => rej(cancelErr())));
   }
+  const liveOps = [];
   async function runAction(fn, { label = "" } = {}) {
-    const op = { cancelled: false, hooks: [] }, prev = S.op;
-    S.op = op;
+    const op = { cancelled: false, hooks: [] };
+    liveOps.push(op); S.op = op;
     try { return await fn(); }
     catch (e) { reportError(e, () => runAction(fn, { label }), label); }
-    finally { if (S.op === op) { S.op = prev || null; if (!S.op) { const el = $("#progress"); if (el && !el.hidden) hideProgress(); } } }
+    finally {
+      // plusieurs opérations peuvent se chevaucher (OCR automatique + action de l'utilisateur) :
+      // on retire celle-ci, la dernière encore en cours redevient l'opération active
+      const i = liveOps.indexOf(op); if (i >= 0) liveOps.splice(i, 1);
+      S.op = liveOps.length ? liveOps[liveOps.length - 1] : null;
+      if (!S.op) { const el = $("#progress"); if (el && !el.hidden) hideProgress(); }
+    }
   }
 
   /** Traduit une erreur technique en message clair, avec la solution. */
@@ -4612,7 +4789,7 @@
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, lineSegments, OfficeXL, cleanSnip, normalizeMeta, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));
