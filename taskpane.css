@@ -588,3 +588,15 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 #pages.drawing .ovbox .hdl.h-e, #pages.drawing .ovbox .hdl.h-w { cursor: ew-resize; }
 .ovbox.resizable .tag { left: calc(100% + 14px); }
 @media (max-width: 420px) { #rotL { display: none; } }
+
+/* ===== v12 : aperçu du tableau — colonnes à glisser, à retirer ===== */
+#ctxPanel table.tp th.tp-col { cursor: grab; user-select: none; touch-action: none; position: relative; padding-right: 22px; }
+#ctxPanel table.tp th.tp-col.dragging { opacity: .55; cursor: grabbing; }
+#ctxPanel table.tp th .tp-grip { color: var(--soft); margin-right: 4px; font-size: 11px; letter-spacing: -1px; }
+#ctxPanel table.tp th .tp-del { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); min-height: 0; width: 17px; height: 17px; padding: 0; border: 0; background: none; color: var(--soft); font-size: 13px; line-height: 17px; border-radius: 3px; }
+#ctxPanel table.tp th .tp-del:hover { color: var(--ko); background: var(--hover); }
+#ctxPanel table.tp th.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+#ctxPanel table.tp th.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+#ctxPanel table.tp th.drop-merge { background: color-mix(in srgb, var(--accent) 18%, var(--chrome)); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
+#ctxPanel table.tp th.off span, #ctxPanel table.tp td.coff { color: var(--soft); text-decoration: line-through; background: var(--hover); }
+.tablebox .colx { position: absolute; top: 0; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, rgba(196,43,28,.16) 0 5px, rgba(196,43,28,.05) 5px 10px); border-left: 1px solid rgba(196,43,28,.5); border-right: 1px solid rgba(196,43,28,.5); }

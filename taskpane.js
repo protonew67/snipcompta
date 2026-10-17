@@ -52,7 +52,7 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261017-1554"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-1618"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
@@ -847,6 +847,11 @@
         rx.style.top = (row.y0 - 1 - r.y0) * sc + "px"; rx.style.height = (row.y1 - row.y0 + 2) * sc + "px";
         tb.appendChild(rx);
       }
+      for (const c of viewCols(t)) if (c.off) {
+        const cx = document.createElement("div"); cx.className = "colx";
+        cx.style.left = (c.x0 - r.x0) * sc + "px"; cx.style.width = (c.x1 - c.x0) * sc + "px";
+        tb.appendChild(cx);
+      }
       t.seps.forEach((x, i) => {
         const s = document.createElement("div");
         s.className = "sep"; s.dataset.i = i; s.style.left = (x - r.x0) * sc + "px";
@@ -1191,11 +1196,19 @@
       if (!cov[i]) { let j = i; while (j <= last && !cov[j]) j++; if (j - i >= Math.max(4, 0.5 * h)) seps.push(r.x0 + (i + j) / 2); i = j; } else i++;
     }
     // 2) colonnes par alignement : départs de textes, fins de montants
-    const minSup = lines.length >= 4 ? 2 : 1, tolA = Math.max(4, 0.9 * h);
+    const tolA = Math.max(4, 0.9 * h);
+    // lignes « de suite » (2e ligne d'un libellé, souvent décalée ; 2e ligne d'un en-tête) : sans montant et ne
+    // commençant pas à la première colonne. Elles ne définissent pas de colonne (sinon une fausse colonne apparaît).
+    const starts = segLines.filter((sl) => sl.length).map((sl) => sl[0].x0).sort((a, b) => a - b);
+    let firstX = starts[0], bestN = 0;
+    for (const x of starts) { const n2 = starts.filter((y) => Math.abs(y - x) <= tolA).length; if (n2 > bestN) { bestN = n2; firstX = x; } }
+    const primary = segLines.map((sl) => sl.length && (sl.some((sg) => sg.num) || sl[0].x0 <= firstX + tolA));
+    const nPrim = primary.filter(Boolean).length;
+    const minSup = nPrim >= 4 ? Math.max(2, Math.round(nPrim * 0.06)) : 1;
     const clusters = [];
     for (const side of ["L", "R"]) {
       const an = [];
-      segLines.forEach((sl, li) => sl.forEach((sg) => {
+      segLines.forEach((sl, li) => primary[li] && sl.forEach((sg) => {
         if (!/[A-Za-zÀ-ÿ0-9]/.test(sg.text)) return;            // tirets, taches d'OCR : pas une colonne
         if ((side === "R") === sg.num) an.push({ x: side === "R" ? sg.x1 : sg.x0, li, sg });
       }));
@@ -1285,6 +1298,49 @@
     drawOverlay(); updateTablePreview();
   }
 
+  /* ---- Colonnes de l'aperçu : ordre et colonnes retirées (repérées par leur position sur la pièce) ---- */
+  function physCols(t) {
+    const xs = [t.rect.x0, ...[...t.seps].sort((a, b) => a - b), t.rect.x1];
+    return xs.slice(0, -1).map((x0, i) => ({ i, x0, x1: xs[i + 1], cx: (x0 + xs[i + 1]) / 2 }));
+  }
+  /** Colonnes dans l'ordre d'affichage / d'insertion, avec leur état « retirée ». */
+  function viewCols(t) {
+    const pcs = physCols(t), ord = t.orderX || [], ex = t.exclX || [];
+    const inCol = (x, pc) => x >= pc.x0 && x < pc.x1;
+    // une colonne sans place connue (coupée après coup) se range juste après sa voisine de gauche
+    let prev = -1;
+    const ranked = pcs.map((pc) => {
+      const k = ord.length ? ord.findIndex((x) => inCol(x, pc)) : pc.i;
+      const r = k >= 0 ? k : prev + 0.001 * (pc.i + 1);
+      prev = r;
+      return { ...pc, off: ex.some((x) => inCol(x, pc)), r };
+    });
+    return ranked.sort((a, b) => a.r - b.r || a.i - b.i);
+  }
+  const tableCells = (t, cells) => viewCols(t).filter((c) => !c.off).map((c) => cells[c.i] ?? "");
+  function tableToggleCol(t, i) {
+    const pc = physCols(t)[i]; if (!pc) return;
+    const ex = (t.exclX || []).filter((x) => !(x >= pc.x0 && x < pc.x1));
+    if (ex.length === (t.exclX || []).length) ex.push(pc.cx);
+    t.exclX = ex;
+  }
+  /** Glisser une colonne : sur le centre d'une voisine = fusion ; sur un bord = déplacement. */
+  function tableDropCol(t, from, to, where) {
+    const pcs = physCols(t), A = pcs[from], B = pcs[to]; if (!A || !B || from === to) return;
+    if (where === "merge" && Math.abs(from - to) === 1) {
+      const k = Math.min(from, to), seps = [...t.seps].sort((a, b) => a - b);
+      seps.splice(k, 1); t.seps = seps; t.manual = true;
+      const lo = Math.min(A.x0, B.x0), hi = Math.max(A.x1, B.x1);
+      t.exclX = (t.exclX || []).filter((x) => x < lo || x >= hi);
+      if (t.orderX) t.orderX = t.orderX.filter((x) => !(x >= A.x0 && x < A.x1));
+      return;
+    }
+    const v = viewCols(t).map((c) => c.i).filter((i) => i !== from);
+    let k = v.indexOf(to); if (where === "after") k++;
+    v.splice(k, 0, from);
+    t.orderX = v.map((i) => pcs[i].cx);
+  }
+
   let previewTimer = null;
   const throttledPreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(updateTablePreview, 120); };
 
@@ -1298,17 +1354,17 @@
     const rows = extractTable(pg, t.rect, t.seps, S.opts.mergeRows, t.manual);
     t.rows = rows;
     t.rowYs = rows.slice(1).map((r) => r.y0 - 1);
-    const nc = t.seps.length + 1;
+    const vc = viewCols(t), nc = vc.filter((c) => !c.off).length;
     const kept = rows.filter((r) => !t.excl.has(rowKey(t.page, r))).length;
     const multi = doc.numPages > 1;
     panel.hidden = false;
-    panel.innerHTML = `<div class="tp-head"><strong>Tableau</strong> <span class="hint">${kept} ligne(s) retenue(s) × ${nc} colonne(s)</span></div>
-      <div class="hint">Cliquez dans le cadre pour ajouter une colonne · glissez un trait pour le déplacer · <b>×</b> retire une ligne · <b>⇹</b> fusionne deux colonnes.</div>
+    panel.innerHTML = `<div class="tp-head"><strong>Tableau</strong> <span class="hint">${kept} ligne(s) × ${nc} colonne(s)</span></div>
+      <div class="hint">Glissez un en-tête <b>sur</b> la colonne voisine pour les fusionner, ou <b>entre</b> deux colonnes pour la déplacer · <b>×</b> retire une colonne ou une ligne · sur la pièce, cliquez dans le cadre pour couper une colonne.</div>
       <div class="tp-wrap"><table class="tp">
-        <thead><tr><th></th>${Array.from({ length: nc }, (_, i) => `<th><span>Col. ${i + 1}</span>${i < nc - 1 ? `<button class="tp-merge" data-merge="${i}" title="Fusionner les colonnes ${i + 1} et ${i + 2}">⇹</button>` : ""}</th>`).join("")}</tr></thead>
+        <thead><tr><th class="tp-x"></th>${vc.map((c, k) => `<th class="tp-col${c.off ? " off" : ""}" data-pc="${c.i}" title="Glisser pour fusionner ou déplacer"><span class="tp-grip">⠿</span><span>Col. ${k + 1}</span><button class="tp-del" data-delc="${c.i}" title="${c.off ? "Remettre cette colonne" : "Retirer cette colonne"}">${c.off ? "↺" : "×"}</button></th>`).join("")}</tr></thead>
         <tbody>${rows.map((r, i) => {
           const off = t.excl.has(rowKey(t.page, r));
-          return `<tr class="${off ? "off" : ""}"><td class="tp-x"><button data-row="${i}" title="${off ? "Remettre cette ligne" : "Retirer cette ligne"}">${off ? "↺" : "×"}</button></td>${r.cells.map((c) => `<td class="${parseAmount(c) != null ? "num" : ""}">${esc(c)}</td>`).join("")}</tr>`;
+          return `<tr class="${off ? "off" : ""}"><td class="tp-x"><button data-row="${i}" title="${off ? "Remettre cette ligne" : "Retirer cette ligne"}">${off ? "↺" : "×"}</button></td>${vc.map((c) => { const v = r.cells[c.i] ?? ""; return `<td class="${c.off ? "coff " : ""}${parseAmount(v) != null ? "num" : ""}">${esc(v)}</td>`; }).join("")}</tr>`;
         }).join("")}</tbody></table></div>
       ${multi ? `<div class="row">Pages <input type="number" id="tFrom" min="1" max="${doc.numPages}" value="${t.from}"> à <input type="number" id="tTo" min="1" max="${doc.numPages}" value="${t.to}">
         <span class="hint">(même zone sur chaque page)</span></div>` : ""}
@@ -1319,12 +1375,47 @@
       $("#tTo").onchange = (e) => { t.to = clamp(+e.target.value || t.page, 1, doc.numPages); };
     }
     $$("[data-row]", panel).forEach((b) => (b.onclick = () => { const k = rowKey(t.page, rows[+b.dataset.row]); if (t.excl.has(k)) t.excl.delete(k); else t.excl.add(k); updateTablePreview(); }));
-    $$("[data-merge]", panel).forEach((b) => (b.onclick = () => { t.seps.sort((a, b2) => a - b2).splice(+b.dataset.merge, 1); t.manual = true; updateTablePreview(); }));
+    $$("[data-delc]", panel).forEach((b) => { b.onpointerdown = (e) => e.stopPropagation(); b.onclick = () => { tableToggleCol(t, +b.dataset.delc); drawOverlay(); updateTablePreview(); }; });
+    bindColumnDrag(panel, t);
     $("#tMerge").onchange = (e) => { S.opts.mergeRows = e.target.checked; saveOpts(); updateTablePreview(); };
     $("#tInsert").onclick = () => runAction(insertTable, { label: "Insertion du tableau impossible" });
-    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; updateTablePreview(); };
+    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); t.manual = false; t.orderX = null; t.exclX = []; updateTablePreview(); };
     $("#tCancel").onclick = () => { S.table = null; drawOverlay(); updateTablePreview(); };
     drawOverlay();
+  }
+
+  /* Glisser-déposer des en-têtes de colonnes dans l'aperçu */
+  function bindColumnDrag(panel, t) {
+    const ths = $$("th.tp-col", panel);
+    let d = null;
+    const clear = () => ths.forEach((h) => h.classList.remove("drop-before", "drop-after", "drop-merge", "dragging"));
+    const zone = (th, x) => {
+      const r = th.getBoundingClientRect(), f = (x - r.left) / Math.max(1, r.width), to = +th.dataset.pc;
+      if (f > 0.25 && f < 0.75 && Math.abs(to - d.from) === 1) return "merge";
+      return f < 0.5 ? "before" : "after";
+    };
+    ths.forEach((th) => {
+      th.onpointerdown = (e) => {
+        if (e.button !== 0 || e.target.closest("button")) return;
+        d = { from: +th.dataset.pc, x: e.clientX, moved: false, target: null, where: null };
+        th.setPointerCapture(e.pointerId); e.preventDefault();
+      };
+      th.onpointermove = (e) => {
+        if (!d) return;
+        if (!d.moved && Math.abs(e.clientX - d.x) < 5) return;
+        d.moved = true; clear(); th.classList.add("dragging");
+        const over = ths.find((h) => { const r = h.getBoundingClientRect(); return e.clientX >= r.left && e.clientX < r.right; });
+        d.target = null;
+        if (over && +over.dataset.pc !== d.from) { d.target = +over.dataset.pc; d.where = zone(over, e.clientX); over.classList.add("drop-" + d.where); }
+      };
+      th.onpointerup = () => {
+        const dd = d; d = null; clear();
+        if (!dd || !dd.moved || dd.target == null) return;
+        tableDropCol(t, dd.from, dd.target, dd.where);
+        drawOverlay(); updateTablePreview();
+      };
+      th.onpointercancel = () => { d = null; clear(); };
+    });
   }
 
   async function insertTable() {
@@ -1338,8 +1429,9 @@
       for (const r of extractTable(pg, t.rect, t.seps, S.opts.mergeRows, t.manual)) if (!(t.excl && t.excl.has(rowKey(p, r)))) all.push({ ...r, page: p });
     }
     if (!all.length) return status("Aucune ligne à insérer.", "warn");
-    const nc = t.seps.length + 1;
-    const tv = all.map((r) => r.cells.map(typed));
+    const nc = viewCols(t).filter((c) => !c.off).length;
+    if (!nc) return status("Toutes les colonnes sont retirées : remettez-en au moins une.", "warn");
+    const tv = all.map((r) => tableCells(t, r.cells).map(typed));
     const values = tv.map((r) => r.map((c) => c.v)), fmts = tv.map((r) => r.map((c) => c.f));
     const ac = await xl.activeCell();
     await xl.write(ac.sheet, ac.row, ac.col, values, "table", fmts);
@@ -1347,7 +1439,7 @@
     const made = all.map((r, i) => ({
       id: group + "_" + i, group, type: "table", sheet: ac.sheet, address: rangeA1(ac.row + i, ac.col, 1, nc),
       docId: doc.id, docName: doc.name, rects: [{ docId: doc.id, page: r.page, x0: r.x0, y0: r.y0 - 1, x1: r.x1, y1: r.y1 + 1 }],
-      value: r.cells.filter(Boolean).join(" | "), cellVals: values[i], created: Date.now() + i / 1000,
+      value: tableCells(t, r.cells).filter(Boolean).join(" | "), cellVals: values[i], created: Date.now() + i / 1000,
     }));
     for (const sn of made) S.snips.set(sn.id, sn);
     await xl.addLinks(made);
@@ -4290,11 +4382,8 @@
     if (!pg || !pg.lines) { if (!pg) pageText(doc, p, { allowOcr: false }).catch(() => {}); return; }
     const pt = evPt(e, ov);
     let r = null, kind = "";
-    if (S.mode === "table") {
-      const t = S.table;
-      if (t && t.docId === doc.id && t.page === p && pt.x > t.rect.x0 && pt.x < t.rect.x1 && pt.y > t.rect.y0 && pt.y < t.rect.y1) { hideHover(); return; }
-      r = tableRectAt(pg, pt); kind = "table";
-    } else { const t = targetAt(pg, pt); if (t) { r = t.rect; kind = t.kind; } }
+    if (S.mode === "table") { hideHover(); return; }      // outil Tableau : pas de cadre au survol (on entoure, ou on clique)
+    { const t = targetAt(pg, pt); if (t) { r = t.rect; kind = t.kind; } }
     if (!r) { hideHover(); return; }
     if (!hovEl) { hovEl = document.createElement("div"); hovEl.className = "hov"; }
     if (hovEl.parentNode !== ov) ov.appendChild(hovEl);
@@ -4789,7 +4878,7 @@
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, lineSegments, OfficeXL, cleanSnip, normalizeMeta, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, lineSegments, tableDropCol, tableToggleCol, viewCols, OfficeXL, cleanSnip, normalizeMeta, rotateDoc, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));
