@@ -32,7 +32,8 @@
     cur: null, page: 1, zoom: 1, scale: 1, mode: "nav",
     snips: new Map(),     // id -> snip
     sumParts: [], table: null, commentDraft: null, selSnip: null, flash: null, hits: [],
-    opts: { store: true, ocr: true, advance: true, mergeRows: true, pasteImport: true, autoSearch: false, sortFollow: true },
+    opts: { store: true, ocr: true, advance: true, mergeRows: true, pasteImport: true, autoSearch: true, sortFollow: true, winOnImport: true, theme: "auto", cropMargins: true },
+    hitIdx: 0, hitQuery: "", op: null, prog: null, unsaved: false, userActed: false, lastPointer: null, zooms: {},
     renderToken: 0, renderTask: null, ocrWorker: null,
   };
   let xl = null;
@@ -47,12 +48,37 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
+  const BUILD = "20261016-0040"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  function status(msg, kind = "") {
+  let statusTimer = null;
+  /**
+   * Message à l'utilisateur. kind : "" | ok | warn | err | busy (barre de progression annulable) | saving (progression sans annulation).
+   * actions : boutons de solution [{label, fn}].
+   */
+  function status(msg, kind = "", actions) {
+    if (kind === "busy" && S.op && S.op.cancelled) throw cancelErr();
     const el = $("#status");
-    el.textContent = msg;
+    if (!el) return;
+    clearTimeout(statusTimer);
+    if (kind === "busy" || kind === "saving") { showProgress(msg, kind === "busy" && !!S.op); return; }
+    hideProgress();
+    if (!msg) { el.hidden = true; return; }
+    el.innerHTML = "";
+    const sp = document.createElement("span"); sp.className = "smsg"; sp.textContent = msg; el.appendChild(sp);
+    for (const a of actions || []) {
+      const b = document.createElement("button"); b.className = "sact"; b.textContent = a.label;
+      b.onclick = () => { el.hidden = true; Promise.resolve().then(a.fn).catch((e) => reportError(e)); };
+      el.appendChild(b);
+    }
+    const x = document.createElement("button"); x.className = "sclose"; x.title = "Fermer"; x.textContent = "×"; x.onclick = () => { el.hidden = true; };
+    el.appendChild(x);
     el.className = kind;
+    el.hidden = false;
+    const ms = (actions && actions.length ? 16000 : 0) + (kind === "err" ? 10000 : kind === "warn" ? 7000 : 4200);
+    statusTimer = setTimeout(() => { el.hidden = true; }, ms);
+    el.onmouseenter = () => clearTimeout(statusTimer);
+    el.onmouseleave = () => { statusTimer = setTimeout(() => { el.hidden = true; }, 3000); };
   }
 
   function colLetters(c) {
@@ -226,11 +252,12 @@
   async function getOcr() {
     if (typeof Tesseract === "undefined") throw new Error("Le moteur OCR n'a pas pu être chargé (fichiers lib/ manquants ?)");
     if (!S.ocrWorker) {
-      status("Chargement du moteur OCR (la première fois, ~10-20 s)…", "busy");
+      status("Chargement du moteur OCR (la première fois, ~10-20 s)…", "saving");
       S.ocrWorker = Tesseract.createWorker("fra+eng", 1, {
         workerPath: LIB("tesseract/worker.min.js"),
         corePath: LIB("tesseract/core"),
         langPath: LIB("tesseract/lang"),
+        logger: (m) => { try { if (S.ocrMsg && m && m.status === "recognizing text") status(`${S.ocrMsg} ${Math.round((m.progress || 0) * 100)} %`, S.op ? "busy" : "saving"); } catch (_) { /* annulation : gérée par onCancel */ } },
       });
       S.ocrWorker.catch(() => { S.ocrWorker = null; });
     }
@@ -241,7 +268,8 @@
     if (pg.ocrPromise) return pg.ocrPromise;
     pg.ocrPromise = (async () => {
       const worker = await getOcr();
-      status(`Reconnaissance du texte (OCR) — ${doc.name}, page ${p}…`, "busy");
+      S.ocrMsg = `Lecture du scan (OCR) — ${doc.name}, page ${p}…`;
+      status(S.ocrMsg, "busy");
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       let f;
@@ -258,11 +286,14 @@
         ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
       }
-      const { data } = await worker.recognize(canvas);
+      let data;
+      try { ({ data } = await Promise.race([worker.recognize(canvas), onCancel()])); }
+      finally { S.ocrMsg = null; }
       pg.words = (data.words || []).filter((w) => w.text && w.text.trim() && w.confidence > 20)
         .map((w) => ({ str: w.text.trim(), x0: w.bbox.x0 / f, y0: w.bbox.y0 / f, x1: w.bbox.x1 / f, y1: w.bbox.y1 / f }));
       pg.lines = groupLines(pg.words);
       pg.ocrDone = true;
+      if (doc.crop === null) doc.crop = undefined;
       status(`OCR terminé : ${pg.words.length} mots reconnus (${doc.name}, p. ${p}).`, "ok");
     })();
     try { await pg.ocrPromise; } catch (e) { pg.ocrPromise = null; throw e; }
@@ -274,18 +305,22 @@
     let pg = doc.pages[p];
     if (!pg) {
       pg = doc.pages[p] = {};
-      if (doc.kind === "pdf") {
-        const page = await doc.pdf.getPage(p);
-        const vp = page.getViewport({ scale: 1 });
-        pg.w = vp.width; pg.h = vp.height;
-        const tc = await page.getTextContent();
-        pg.words = wordsFromTextContent(tc, vp);
-        pg.needsOcr = pg.words.reduce((a, w) => a + w.str.length, 0) < 15;
-      } else {
-        pg.w = doc.img.naturalWidth; pg.h = doc.img.naturalHeight; pg.words = []; pg.needsOcr = true;
-      }
-      pg.lines = groupLines(pg.words);
-    }
+      pg.loading = (async () => {
+        if (doc.kind === "pdf") {
+          const page = await doc.pdf.getPage(p);
+          const vp = page.getViewport({ scale: 1 });
+          const tc = await page.getTextContent();
+          const words = wordsFromTextContent(tc, vp);
+          pg.w = vp.width; pg.h = vp.height; pg.words = words;
+          pg.needsOcr = words.reduce((a, w) => a + w.str.length, 0) < 15;
+        } else {
+          pg.w = doc.img.naturalWidth; pg.h = doc.img.naturalHeight; pg.words = []; pg.needsOcr = true;
+        }
+        pg.lines = groupLines(pg.words);
+      })();
+      try { await pg.loading; } catch (e) { if (doc.pages[p] === pg) delete doc.pages[p]; throw e; }
+      finally { pg.loading = null; }
+    } else if (pg.loading) await pg.loading;
     if (pg.needsOcr && !pg.ocrDone && allowOcr) await ocrPage(doc, p, pg);
     return pg;
   }
@@ -302,7 +337,7 @@
     if (doc.ready) return doc.ready;
     doc.ready = (async () => {
       if (!doc.bytes) {
-        status(`Chargement de « ${doc.name} » depuis le classeur…`, "busy");
+        status(`Chargement de « ${doc.name} » depuis le classeur…`, "saving");
         doc.bytes = await xl.loadDocBytes(doc.id);
         if (!doc.bytes) throw new Error(`Le document « ${doc.name} » n'est pas disponible : réimportez-le.`);
       }
@@ -323,7 +358,10 @@
     let last = null;
     const versions = [];
     files = await expandFiles(files);
+    let k = 0;
     for (const f of files) {
+      k++;
+      if (files.length > 1) status(`Import de « ${f.name} » (${k}/${files.length})…`, "busy");
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
         const id = hashBytes(bytes);
@@ -337,27 +375,36 @@
           await openDocData(doc);
           if (S.opts.store && S.inOffice) {
             if (bytes.length > MAX_STORE_MB * 1048576) status(`« ${f.name} » dépasse ${MAX_STORE_MB} Mo : non enregistré dans le classeur.`, "warn");
-            else { await xl.saveDoc(doc, (pct) => status(`Enregistrement de « ${f.name} » dans le classeur… ${pct} %`, "busy")); doc.stored = true; }
+            else { await xl.saveDoc(doc, (pct) => status(`Enregistrement de « ${f.name} » dans le classeur… ${pct} %`, "saving")); doc.stored = true; }
           }
         } else if (!doc.bytes) { doc.bytes = bytes; }
         last = doc;
         status(`« ${doc.name} » importé (${doc.numPages || "?"} page${doc.numPages > 1 ? "s" : ""}).`, "ok");
-      } catch (e) { console.error(e); status(`Erreur à l'import de « ${f.name} » : ${e.message}`, "err"); }
+      } catch (e) {
+        if (isCancel(e)) throw e;
+        console.error(e);
+        reportError(e, files.length === 1 ? () => runAction(() => importFiles([f])) : null, `Import de « ${f.name} » impossible`);
+      }
     }
     refreshDocUI();
     if (last) { await openDoc(last.id, 1); switchTab("viewer"); }
     if (versions.length) offerVersionTransfer(versions[0][0], versions[0][1]);
+    if (last && S.inOffice && !S.isWindow && S.opts.winOnImport) { if (S.win) winSend({ event: "reloadDocs" }); else openWindow(); }
   }
 
   async function openDoc(id, page = 1) {
     const doc = S.docs.get(id);
     if (!doc) return;
+    if (S.win) winSend({ event: "open", doc: id, page });
     if (S.cur !== id) { S.table = null; }
     S.cur = id; S.page = page;
     $("#docSelect").value = id;
     try { await openDocData(doc); } catch (e) { status(e.message, "err"); return; }
     S.page = clamp(page, 1, doc.numPages);
+    updateSide();
     await render();
+    scrollToPage(S.page);
+    if (S.hitQuery && !S.hits.some((h) => h.docId === id)) cellHighlight(S.hitQuery);
   }
 
   async function deleteDoc(id) {
@@ -373,7 +420,8 @@
   function refreshDocUI() {
     const sel = $("#docSelect"), ms = $("#matchDoc");
     const docs = [...S.docs.values()];
-    sel.innerHTML = docs.length ? docs.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("") : `<option value="">— aucun document —</option>`;
+    sel.innerHTML = docs.length ? docs.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("") : `<option value="">Aucun document</option>`;
+    document.body.classList.toggle("nodoc", !docs.length);
     if (S.cur) sel.value = S.cur;
     const opts = docs.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
     ms.innerHTML = `<option value="*">Tous les documents</option>` + opts;
@@ -387,45 +435,157 @@
   /* ====================================================================== */
   const curDoc = () => S.docs.get(S.cur);
 
+  /* ---------------- Visionneuse : toutes les pages empilées --------------- */
+  let pageObserver = null, thumbObserver = null;
+  function loadZooms() { try { return JSON.parse(localStorage.getItem("snipcompta.zoom") || "{}"); } catch (_) { return {}; } }
+  S.zooms = loadZooms();
+  const zoomFor = (doc) => (doc && S.zooms[doc.id] != null ? S.zooms[doc.id] : 1);
+  function setZoom(doc, z) {
+    if (!doc) return;
+    S.zooms[doc.id] = z === "page" ? "page" : clamp(z, 0.3, 6);
+    try { localStorage.setItem("snipcompta.zoom", JSON.stringify(S.zooms)); } catch (_) { /* ignore */ }
+    render();
+  }
+  async function pageDims(doc) {
+    if (doc.dims && doc.dims.length === doc.numPages) return doc.dims;
+    const dims = [];
+    if (doc.kind === "pdf") {
+      for (let p = 1; p <= doc.numPages; p++) { const vp = (await doc.pdf.getPage(p)).getViewport({ scale: 1 }); dims.push({ w: vp.width, h: vp.height }); }
+    } else dims.push({ w: doc.img.naturalWidth, h: doc.img.naturalHeight });
+    doc.dims = dims;
+    return dims;
+  }
+  const pageEl = (p) => $(`#pages .pg[data-p="${p}"]`);
+  const curOv = () => $(`#pages .ov[data-p="${S.page}"]`);
+
   async function render() {
     const doc = curDoc();
     const token = ++S.renderToken;
-    const wrap = $("#pageWrap"), empty = $("#emptyState");
-    if (!doc) { wrap.hidden = true; empty.hidden = false; $("#pageInfo").textContent = "–"; return; }
-    wrap.hidden = false; empty.hidden = true;
+    const pagesEl = $("#pages"), empty = $("#emptyState");
+    if (!doc) { pagesEl.innerHTML = ""; pagesEl.dataset.key = ""; pagesEl.hidden = true; empty.hidden = false; $("#pageInfo").textContent = "–"; renderThumbs(null); return; }
+    pagesEl.hidden = false; empty.hidden = true;
     try {
-      const pg = await pageText(doc, S.page, { allowOcr: false });
+      await openDocData(doc);
+      const dims = await pageDims(doc);
       if (token !== S.renderToken) return;
-      const avail = Math.max(120, $("#viewer").clientWidth - 14);
-      const scale = Math.max(0.15, (avail / pg.w) * S.zoom);
+      const th = $("#thumbs"); if (th) th.hidden = doc.numPages < 2;
+      const v = $("#viewer");
+      if (!v.clientWidth) return;   // onglet masqué : on dessinera en y revenant
+      const maxW = Math.max(...dims.map((d) => d.w)), maxH = Math.max(...dims.map((d) => d.h));
+      const padX = v.clientWidth < 560 ? 12 : 28;
+      const availW = Math.max(120, v.clientWidth - padX), availH = Math.max(120, v.clientHeight - 28);
+      const z = zoomFor(doc);
+      // marges blanches ignorées : on cadre sur la zone où il y a du texte
+      const crop = z !== "page" && S.opts.cropMargins !== false ? await cropOf(doc, maxW) : null;
+      if (token !== S.renderToken) return;
+      const cw = crop ? crop.x1 - crop.x0 : maxW, fitW = availW / cw;
+      const scale = Math.max(0.1, z === "page" ? Math.min(availW / maxW, availH / maxH) : fitW * z);
+      S.cropX = crop ? crop.x0 : 0;
+      const key = doc.id + "|" + scale.toFixed(4) + "|" + doc.numPages + "|" + (doc.rev || 0) + "|" + (crop ? crop.x0.toFixed(1) + "-" + crop.x1.toFixed(1) : "");
+      if (pagesEl.dataset.key !== key) {
+        const keepPage = S.page, el0 = pageEl(keepPage);
+        const frac = el0 ? (v.scrollTop - el0.offsetTop) / Math.max(1, el0.offsetHeight) : 0;
+        S.scale = scale;
+        pagesEl.dataset.key = key; pagesEl.innerHTML = "";
+        if (pageObserver) pageObserver.disconnect();
+        pageObserver = new IntersectionObserver((entries) => entries.forEach((en) => { if (en.isIntersecting) renderPage(doc, +en.target.dataset.p, en.target, key); }), { root: v, rootMargin: "700px 0px" });
+        dims.forEach((d, i) => {
+          const p = i + 1;
+          const pg = document.createElement("div");
+          pg.className = "pg"; pg.dataset.p = p;
+          const fw = Math.round(d.w * scale), fh = Math.round(d.h * scale), off = Math.round(S.cropX * scale);
+          pg.dataset.fw = fw; pg.dataset.fh = fh;
+          pg.style.width = (crop ? Math.max(40, Math.min(Math.round(cw * scale), fw - off)) : fw) + "px"; pg.style.height = fh + "px";
+          const pos = `left:${-off}px;width:${fw}px;height:${fh}px`;
+          pg.innerHTML = `<canvas style="${pos}"></canvas><div class="ov" data-p="${p}" style="${pos}"></div>`;
+          pagesEl.appendChild(pg); pageObserver.observe(pg);
+        });
+        const el1 = pageEl(clamp(keepPage, 1, doc.numPages));
+        if (el1) v.scrollTop = el1.offsetTop + Math.max(0, frac) * el1.offsetHeight;
+        renderThumbs(doc);
+      }
       S.scale = scale;
-      const dpr = window.devicePixelRatio || 1;
-      const canvas = $("#pageCanvas");
-      const W = Math.round(pg.w * scale), H = Math.round(pg.h * scale);
-      wrap.style.width = W + "px"; wrap.style.height = H + "px";
+      $("#zoomPct").textContent = Math.round((scale / (96 / 72)) * 100) + " %";
+      updatePageInfo();
+      drawOverlay();
+    } catch (e) { console.error(e); status("Affichage impossible : " + e.message, "err"); }
+  }
+  async function renderPage(doc, p, el, key) {
+    if (el.dataset.done === key) return;
+    el.dataset.done = key;
+    try {
+      const canvas = el.querySelector("canvas");
+      const W = +el.dataset.fw, H = +el.dataset.fh, dpr = window.devicePixelRatio || 1;
       canvas.style.width = W + "px"; canvas.style.height = H + "px";
       canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
       const ctx = canvas.getContext("2d");
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      $("#pageInfo").textContent = `${S.page} / ${doc.numPages}`;
-      drawOverlay();
       if (doc.kind === "pdf") {
-        if (S.renderTask) { try { S.renderTask.cancel(); } catch (_) { /* ignore */ } }
-        const page = await doc.pdf.getPage(S.page);
-        if (token !== S.renderToken) return;
-        const vp = page.getViewport({ scale: scale * dpr });
-        S.renderTask = page.render({ canvasContext: ctx, viewport: vp });
-        try { await S.renderTask.promise; } catch (e) { if (e && e.name === "RenderingCancelledException") return; throw e; }
-      } else {
-        ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
-      }
-      if (token !== S.renderToken) return;
-      // OCR en arrière-plan si la page est un scan
-      if (pg.needsOcr && !pg.ocrDone && S.opts.ocr) {
-        pageText(doc, S.page, { allowOcr: true }).catch((e) => status("OCR impossible : " + e.message, "err"));
-      }
-    } catch (e) { console.error(e); status("Affichage impossible : " + e.message, "err"); }
+        const page = await doc.pdf.getPage(p);
+        await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: (W / doc.dims[p - 1].w) * dpr }) }).promise;
+      } else ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
+      const pg = await pageText(doc, p, { allowOcr: false });
+      if (pg.needsOcr && !pg.ocrDone && S.opts.ocr) runAction(() => pageText(doc, p, { allowOcr: true }), { label: "OCR impossible" });
+    } catch (e) { if (!e || e.name !== "RenderingCancelledException") console.warn("page", p, e); el.dataset.done = ""; }
+  }
+  function updatePageInfo() {
+    const doc = curDoc();
+    $("#pageInfo").textContent = doc ? `${S.page} / ${doc.numPages}` : "–";
+    $$("#thumbs .th").forEach((t) => t.classList.toggle("on", +t.dataset.p === S.page));
+  }
+  function trackScroll() {
+    const v = $("#viewer"), doc = curDoc(); if (!doc) return;
+    const y = v.scrollTop + v.clientHeight * 0.35;
+    let cur = 1;
+    for (const el of $$("#pages .pg")) { if (el.offsetTop <= y) cur = +el.dataset.p; else break; }
+    if (cur !== S.page) { S.page = cur; updatePageInfo(); const th = $(`#thumbs .th[data-p="${cur}"]`); if (th) th.scrollIntoView({ block: "nearest" }); }
+  }
+  function scrollToPage(p, rect) {
+    const v = $("#viewer"), el = pageEl(p); if (!el) return;
+    S.page = p; updatePageInfo();
+    v.scrollTop = el.offsetTop - 10 + (rect ? Math.max(0, rect.y0 * S.scale - 70) : 0);
+    if (rect) v.scrollLeft = Math.max(0, el.offsetLeft + (rect.x0 - (S.cropX || 0)) * S.scale - 40);
+  }
+  /** Zone utile des pages (là où il y a du texte), pour ne pas afficher les grandes marges blanches. */
+  async function cropOf(doc, maxW) {
+    if (doc.crop !== undefined && doc.cropRev === (doc.rev || 0)) return doc.crop;
+    let x0 = Infinity, x1 = -Infinity, n = 0;
+    for (let p = 1; p <= Math.min(doc.numPages, 6); p++) {
+      let pg;
+      try { pg = await pageText(doc, p, { allowOcr: false }); } catch (_) { continue; }
+      if (!pg.words || pg.words.length < 5) continue;
+      for (const w of pg.words) { if (w.x0 < x0) x0 = w.x0; if (w.x1 > x1) x1 = w.x1; }
+      n++;
+    }
+    let crop = null;
+    if (n && x1 > x0) {
+      crop = { x0: Math.max(0, x0 - 20), x1: Math.min(maxW, x1 + 40) };   // à droite : place pour les étiquettes
+      if (crop.x1 - crop.x0 > maxW * 0.9) crop = null;     // presque pleine largeur : inutile
+    }
+    doc.crop = crop; doc.cropRev = doc.rev || 0;
+    return crop;
+  }
+  function renderThumbs(doc) {
+    const box = $("#thumbs"); if (!box) return;
+    if (thumbObserver) thumbObserver.disconnect();
+    box.innerHTML = "";
+    if (!doc || doc.numPages < 2) { box.hidden = true; return; }
+    thumbObserver = new IntersectionObserver((entries) => entries.forEach(async (en) => {
+      if (!en.isIntersecting || en.target.dataset.done) return;
+      en.target.dataset.done = "1";
+      const p = +en.target.dataset.p, c = en.target.querySelector("canvas"), d = doc.dims[p - 1], w = 84, s = w / d.w;
+      c.width = Math.round(w * 2); c.height = Math.round(d.h * s * 2); c.style.width = w + "px"; c.style.height = Math.round(d.h * s) + "px";
+      const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+      try { if (doc.kind === "pdf") { const page = await doc.pdf.getPage(p); await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: s * 2 }) }).promise; } else ctx.drawImage(doc.img, 0, 0, c.width, c.height); }
+      catch (_) { en.target.dataset.done = ""; }
+    }), { root: box, rootMargin: "300px 0px" });
+    for (let p = 1; p <= doc.numPages; p++) {
+      const t = document.createElement("button");
+      t.className = "th" + (p === S.page ? " on" : ""); t.dataset.p = p; t.title = "Page " + p;
+      t.innerHTML = `<canvas></canvas><span>${p}</span>`;
+      t.onclick = () => scrollToPage(p);
+      box.appendChild(t); thumbObserver.observe(t);
+    }
   }
 
   function box(ov, r, cls, color, label, title) {
@@ -442,24 +602,32 @@
   }
 
   function drawOverlay() {
-    const ov = $("#overlay");
-    ov.innerHTML = "";
-    ov.classList.toggle("drawing", S.mode !== "nav");
-    ov.classList.toggle("noting", S.mode === "note" || (S.mode === "markup" && ["text", "check", "cross"].includes(S.markTool)));
-    const doc = curDoc(); if (!doc) return;
-    const p = S.page, sc = S.scale;
+    const pagesEl = $("#pages");
+    pagesEl.classList.toggle("drawing", S.mode !== "nav");
+    pagesEl.classList.toggle("noting", S.mode === "note" || (S.mode === "markup" && ["text", "check", "cross"].includes(S.markTool)));
+    const doc = curDoc();
+    for (const ov of $$("#pages .ov")) { ov.innerHTML = ""; if (doc) drawPageOverlay(ov, doc, +ov.dataset.p); }
+    syncSideList();
+  }
+  function drawPageOverlay(ov, doc, p) {
+    const sc = S.scale;
     for (const sn of S.snips.values()) {
       for (const r of sn.rects) {
         if ((r.docId || sn.docId) !== doc.id || r.page !== p) continue;
-        const st = STYLE[sn.type];
+        const st = STYLE[sn.type] || STYLE.text;
         const showBadge = sn.type !== "table" || /_0$/.test(sn.id) || S.selSnip === sn.id;
-        box(ov, r, "snip" + (S.selSnip === sn.id ? " sel" : ""), st.color, showBadge ? st.label : "", `${st.name} → ${sn.sheet}!${sn.address}`);
+        const cell = String(sn.address || "").split(":")[0];
+        const el = box(ov, r, "snip t-" + sn.type + (S.selSnip === sn.id ? " sel" : ""), st.color, "", `${st.name} → ${sn.sheet}!${sn.address}`);
+        if (showBadge) {
+          const tag = document.createElement("span");
+          tag.className = "tag"; tag.style.background = st.color;
+          tag.innerHTML = `<i>${esc(st.label)}</i><b>${esc(cell)}</b>`;
+          el.appendChild(tag);
+        }
       }
     }
-    for (const part of S.sumParts) {
-      if (part.docId === doc.id && part.page === p) box(ov, part.rect, "part", STYLE.sum.color, fmtNum(part.total));
-    }
-    for (const h of S.hits) if (h.docId === doc.id && h.page === p) box(ov, h.rect, "hit");
+    for (const part of S.sumParts) if (part.docId === doc.id && part.page === p) box(ov, part.rect, "part", STYLE.sum.color, fmtNum(part.total));
+    S.hits.forEach((h, i) => { if (h.docId === doc.id && h.page === p) box(ov, h.rect, "hit" + (S.hitQuery && i === S.hitIdx ? " cur" : "")); });
     if (S.flash && S.flash.docId === doc.id && S.flash.page === p) box(ov, S.flash.rect, "flash");
     const cd = S.commentDraft;
     if (cd && cd.docId === doc.id && cd.page === p) box(ov, cd.rect, "part", STYLE.comment.color, "✎");
@@ -471,8 +639,12 @@
       tb.className = "tablebox";
       tb.style.left = r.x0 * sc + "px"; tb.style.top = r.y0 * sc + "px";
       tb.style.width = (r.x1 - r.x0) * sc + "px"; tb.style.height = (r.y1 - r.y0) * sc + "px";
-      for (const y of t.rowYs || []) {
-        const rl = document.createElement("div"); rl.className = "rowline"; rl.style.top = (y - r.y0) * sc + "px"; tb.appendChild(rl);
+      for (const y of t.rowYs || []) { const rl = document.createElement("div"); rl.className = "rowline"; rl.style.top = (y - r.y0) * sc + "px"; tb.appendChild(rl); }
+      for (const row of t.rows || []) {
+        if (!t.excl || !t.excl.has(rowKey(p, row))) continue;
+        const rx = document.createElement("div"); rx.className = "rowx";
+        rx.style.top = (row.y0 - 1 - r.y0) * sc + "px"; rx.style.height = (row.y1 - row.y0 + 2) * sc + "px";
+        tb.appendChild(rx);
       }
       t.seps.forEach((x, i) => {
         const s = document.createElement("div");
@@ -486,24 +658,29 @@
 
   /* ---------------- Interaction souris / tactile ------------------------ */
   let drag = null;
-  function evPt(e) {
-    const r = $("#overlay").getBoundingClientRect();
+  function evPt(e, ov) {
+    ov = ov || (drag && drag.ov) || (e.target && e.target.closest && e.target.closest(".ov")) || curOv();
+    const r = ov.getBoundingClientRect();
     return { x: (e.clientX - r.left) / S.scale, y: (e.clientY - r.top) / S.scale };
   }
   function bindOverlay() {
-    const ov = $("#overlay");
-    ov.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || !curDoc()) return;
+    const host = $("#pages");
+    host.addEventListener("pointerdown", (e) => {
+      const ov = e.target.closest(".ov");
+      if (e.button !== 0 || !curDoc() || !ov) return;
+      if (S.page !== +ov.dataset.p) { S.page = +ov.dataset.p; updatePageInfo(); }
+      S.lastPointer = { x: e.clientX, y: e.clientY };
       if (e.target.classList.contains("sep")) {
-        drag = { kind: "sep", idx: +e.target.dataset.i, el: e.target };
+        drag = { kind: "sep", idx: +e.target.dataset.i, el: e.target, ov };
         ov.setPointerCapture(e.pointerId); e.preventDefault(); return;
       }
-      const pt = evPt(e);
-      drag = { kind: "rect", x: pt.x, y: pt.y, moved: false, el: null };
+      const pt = evPt(e, ov);
+      drag = { kind: "rect", x: pt.x, y: pt.y, moved: false, el: null, ov };
+      hideHover();
       if (S.mode !== "nav") { ov.setPointerCapture(e.pointerId); e.preventDefault(); }
     });
-    ov.addEventListener("pointermove", (e) => {
-      if (!drag) return;
+    host.addEventListener("pointermove", (e) => {
+      if (!drag) { hoverAt(e); return; }
       const pt = evPt(e);
       if (drag.kind === "sep") {
         const t = S.table; if (!t) return;
@@ -516,31 +693,45 @@
       if (!drag.moved && Math.hypot(pt.x - drag.x, pt.y - drag.y) * S.scale > 4) drag.moved = true;
       if (drag.moved) {
         const r = { x0: Math.min(drag.x, pt.x), y0: Math.min(drag.y, pt.y), x1: Math.max(drag.x, pt.x), y1: Math.max(drag.y, pt.y) };
-        if (!drag.el) drag.el = box(ov, r, "drag");
+        if (!drag.el) drag.el = box(drag.ov, r, "drag");
         drag.el.style.left = r.x0 * S.scale + "px"; drag.el.style.top = r.y0 * S.scale + "px";
         drag.el.style.width = (r.x1 - r.x0) * S.scale + "px"; drag.el.style.height = (r.y1 - r.y0) * S.scale + "px";
+        liveValue(r, e);
       }
     });
+    host.addEventListener("pointerleave", () => { if (!drag) hideHover(); });
     const end = (e) => {
       if (!drag) return;
       const d = drag; drag = null;
+      hideLive();
+      S.lastPointer = { x: e.clientX, y: e.clientY };
       if (d.kind === "sep") { S.table.seps.sort((a, b) => a - b); drawOverlay(); updateTablePreview(); return; }
-      const pt = evPt(e);
+      const pt = evPt(e, d.ov);
       if (d.el) d.el.remove();
-      if (!d.moved || S.mode === "nav") { handleClick(pt); return; }
+      if (!d.moved || S.mode === "nav") { handleClick(pt, e); return; }
       const r = { x0: Math.min(d.x, pt.x), y0: Math.min(d.y, pt.y), x1: Math.max(d.x, pt.x), y1: Math.max(d.y, pt.y) };
-      handleRect(r, { ctrl: e.ctrlKey, from: { x: d.x, y: d.y }, to: pt }).catch((err) => { console.error(err); status("Erreur : " + err.message, "err"); });
+      runAction(() => handleRect(r, { ctrl: e.ctrlKey, from: { x: d.x, y: d.y }, to: pt }));
     };
-    ov.addEventListener("pointerup", end);
-    ov.addEventListener("pointercancel", () => { if (drag && drag.el) drag.el.remove(); drag = null; });
-    ov.addEventListener("dblclick", (e) => {
-      if (e.target.classList.contains("sep") && S.table) {
-        S.table.seps.splice(+e.target.dataset.i, 1); drawOverlay(); updateTablePreview();
-      }
+    host.addEventListener("pointerup", end);
+    host.addEventListener("pointercancel", () => { if (drag && drag.el) drag.el.remove(); drag = null; hideLive(); });
+    host.addEventListener("dblclick", (e) => {
+      if (e.target.classList.contains("sep") && S.table) { S.table.seps.splice(+e.target.dataset.i, 1); drawOverlay(); updateTablePreview(); }
     });
+    const v = $("#viewer");
+    let st = null;
+    v.addEventListener("scroll", () => { if (st) return; st = requestAnimationFrame(() => { st = null; trackScroll(); }); });
+    v.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const doc = curDoc(); if (!doc) return;
+      let z = zoomFor(doc); if (z === "page") z = 1;
+      clearTimeout(v._zt);
+      S._zoomPending = clamp((S._zoomPending || z) * (e.deltaY < 0 ? 1.12 : 1 / 1.12), 0.3, 6);
+      v._zt = setTimeout(() => { const nz = S._zoomPending; S._zoomPending = null; setZoom(doc, nz); }, 70);
+    }, { passive: false });
   }
 
-  function handleClick(pt) {
+  function handleClick(pt, ev) {
     const doc = curDoc(); if (!doc) return;
     if (extraClick(pt)) return;
     const t = S.table;
@@ -548,6 +739,7 @@
       if (!t.seps.some((x) => Math.abs(x - pt.x) * S.scale < 6)) { t.seps.push(pt.x); t.seps.sort((a, b) => a - b); drawOverlay(); updateTablePreview(); }
       return;
     }
+    if (CLICK_MODES.has(S.mode)) { queueClickSnip(pt, ev); return; }
     let hit = null;
     for (const sn of S.snips.values()) {
       for (const r of sn.rects) {
@@ -590,15 +782,16 @@
     if (S.opts.advance) await xl.select(ac.sheet, ac.row + 1, ac.col);
     S.selSnip = id;
     drawOverlay(); refreshSnipList();
-    status(`${STYLE[type].name} → ${ac.sheet}!${address} : ${fmtVal(value)}`, "ok");
+    confirmSnip(fmtVal(value), address, type);
   }
 
-  async function doTextSnip(r) {
+  async function doTextSnip(r, target) {
     const doc = curDoc(), p = S.page;
+    if (target) { const tv = typed(target.text); return placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...target.rect }], tv.f); }
     const pg = await pageText(doc, p, { allowOcr: true });
     const ws = wordsInRect(pg.words, r);
     const text = joinWords(ws);
-    if (!text) return status(pg.needsOcr && !S.opts.ocr ? "Page scannée : activez l'OCR dans l'onglet Documents." : "Aucun texte dans la zone sélectionnée.", "warn");
+    if (!text) return status(pg.needsOcr && !S.opts.ocr ? "Page scannée : activez l'OCR dans les réglages." : "Aucun texte dans la zone sélectionnée.", "warn");
     const tv = typed(text);
     await placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...bboxOf(ws, 2) }], tv.f);
   }
@@ -623,10 +816,7 @@
     const doc = curDoc(), p = S.page;
     const pg = await pageText(doc, p, { allowOcr: true });
     const ws = wordsInRect(pg.words, r);
-    const lines = groupLines(ws);
-    let amts = [];
-    for (const L of lines) for (const a of findAmounts(L.text)) amts.push({ ...a, bbox: spanBBox(L, a.start, a.end) });
-    if (amts.some((a) => a.hasDec)) amts = amts.filter((a) => a.hasDec);
+    const amts = amountsIn(ws);
     if (!amts.length) return status("Aucun montant trouvé dans cette zone.", "warn");
     const total = round2(amts.reduce((s, a) => s + a.value, 0));
     S.sumParts.push({ docId: doc.id, page: p, rect: bboxOf(ws, 2), values: amts.map((a) => a.value), total });
@@ -643,7 +833,7 @@
       <div class="total">Total : ${fmtNum(total)}</div>
       <div class="row"><button class="primary" id="sumInsert">Insérer le total (Entrée)</button><button id="sumClear">Vider</button></div>`;
     $$("[data-rm]", panel).forEach((b) => (b.onclick = () => { S.sumParts.splice(+b.dataset.rm, 1); drawOverlay(); showSumPanel(); }));
-    $("#sumInsert").onclick = () => insertSum().catch((e) => status("Erreur : " + e.message, "err"));
+    $("#sumInsert").onclick = () => runAction(() => insertSum());
     $("#sumClear").onclick = () => { S.sumParts = []; drawOverlay(); showSumPanel(); };
   }
 
@@ -707,42 +897,53 @@
     return rows;
   }
 
-  async function startTable(r) {
-    const doc = curDoc(), p = S.page;
+  async function startTable(r, page) {
+    const doc = curDoc(), p = page || S.page;
     const pg = await pageText(doc, p, { allowOcr: true });
     const ws = wordsInRect(pg.words, r);
     if (!ws.length) return status("Aucun texte dans la zone : élargissez la sélection ou activez l'OCR.", "warn");
-    S.table = { docId: doc.id, page: p, rect: r, seps: autoColumns(ws, r), from: p, to: p };
+    S.table = { docId: doc.id, page: p, rect: r, seps: autoColumns(ws, r), from: p, to: p, excl: new Set() };
     drawOverlay(); updateTablePreview();
-    status("Tableau détecté : ajustez les colonnes si besoin, puis « Insérer dans Excel ».", "ok");
   }
 
   let previewTimer = null;
   const throttledPreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(updateTablePreview, 120); };
 
+  const rowKey = (page, r) => page + ":" + Math.round(r.y0);
   function updateTablePreview() {
     const t = S.table, panel = $("#ctxPanel");
     if (!t) { if (!S.sumParts.length) panel.hidden = true; return; }
+    t.excl = t.excl || new Set();
     const doc = S.docs.get(t.docId);
     const pg = doc.pages[t.page];
     const rows = extractTable(pg, t.rect, t.seps, S.opts.mergeRows);
+    t.rows = rows;
     t.rowYs = rows.slice(1).map((r) => r.y0 - 1);
-    const show = rows.slice(0, 8);
     const nc = t.seps.length + 1;
+    const kept = rows.filter((r) => !t.excl.has(rowKey(t.page, r))).length;
+    const multi = doc.numPages > 1;
     panel.hidden = false;
-    panel.innerHTML = `<div><strong>Tableau</strong> — ${rows.length} ligne(s) × ${nc} colonne(s) sur cette page
-        <div class="hint">Cliquez dans le cadre violet pour ajouter une colonne, glissez un trait pour le déplacer, double-cliquez pour le supprimer.</div></div>
-      <table>${show.map((r) => `<tr>${r.cells.map((c) => `<td class="${parseAmount(c) != null ? "num" : ""}">${esc(c)}</td>`).join("")}</tr>`).join("")}</table>
-      ${rows.length > show.length ? `<div class="hint">… ${rows.length - show.length} autre(s) ligne(s)</div>` : ""}
-      <div class="row">Pages <input type="number" id="tFrom" min="1" max="${doc.numPages}" value="${t.from}"> à <input type="number" id="tTo" min="1" max="${doc.numPages}" value="${t.to}">
-        <span class="hint">(même zone sur chaque page)</span></div>
-      <label class="chk"><input type="checkbox" id="tMerge" ${S.opts.mergeRows ? "checked" : ""}> Fusionner les lignes de suite (1<sup>re</sup> colonne vide, sans montant)</label>
+    panel.innerHTML = `<div class="tp-head"><strong>Tableau</strong> <span class="hint">${kept} ligne(s) retenue(s) × ${nc} colonne(s)</span></div>
+      <div class="hint">Cliquez dans le cadre pour ajouter une colonne · glissez un trait pour le déplacer · <b>×</b> retire une ligne · <b>⇹</b> fusionne deux colonnes.</div>
+      <div class="tp-wrap"><table class="tp">
+        <thead><tr><th></th>${Array.from({ length: nc }, (_, i) => `<th><span>Col. ${i + 1}</span>${i < nc - 1 ? `<button class="tp-merge" data-merge="${i}" title="Fusionner les colonnes ${i + 1} et ${i + 2}">⇹</button>` : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((r, i) => {
+          const off = t.excl.has(rowKey(t.page, r));
+          return `<tr class="${off ? "off" : ""}"><td class="tp-x"><button data-row="${i}" title="${off ? "Remettre cette ligne" : "Retirer cette ligne"}">${off ? "↺" : "×"}</button></td>${r.cells.map((c) => `<td class="${parseAmount(c) != null ? "num" : ""}">${esc(c)}</td>`).join("")}</tr>`;
+        }).join("")}</tbody></table></div>
+      ${multi ? `<div class="row">Pages <input type="number" id="tFrom" min="1" max="${doc.numPages}" value="${t.from}"> à <input type="number" id="tTo" min="1" max="${doc.numPages}" value="${t.to}">
+        <span class="hint">(même zone sur chaque page)</span></div>` : ""}
+      <label class="chk"><input type="checkbox" id="tMerge" ${S.opts.mergeRows ? "checked" : ""}> Recoller les libellés sur plusieurs lignes</label>
       <div class="row"><button class="primary" id="tInsert">Insérer dans Excel (Entrée)</button><button id="tAuto">Colonnes auto</button><button id="tCancel">Annuler</button></div>`;
-    $("#tFrom").onchange = (e) => { t.from = clamp(+e.target.value || 1, 1, doc.numPages); };
-    $("#tTo").onchange = (e) => { t.to = clamp(+e.target.value || t.page, 1, doc.numPages); };
-    $("#tMerge").onchange = (e) => { S.opts.mergeRows = e.target.checked; saveOpts(); updateTablePreview(); drawOverlay(); };
-    $("#tInsert").onclick = () => insertTable().catch((e) => { console.error(e); status("Erreur : " + e.message, "err"); });
-    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); drawOverlay(); updateTablePreview(); };
+    if (multi) {
+      $("#tFrom").onchange = (e) => { t.from = clamp(+e.target.value || 1, 1, doc.numPages); };
+      $("#tTo").onchange = (e) => { t.to = clamp(+e.target.value || t.page, 1, doc.numPages); };
+    }
+    $$("[data-row]", panel).forEach((b) => (b.onclick = () => { const k = rowKey(t.page, rows[+b.dataset.row]); if (t.excl.has(k)) t.excl.delete(k); else t.excl.add(k); updateTablePreview(); }));
+    $$("[data-merge]", panel).forEach((b) => (b.onclick = () => { t.seps.sort((a, b2) => a - b2).splice(+b.dataset.merge, 1); updateTablePreview(); }));
+    $("#tMerge").onchange = (e) => { S.opts.mergeRows = e.target.checked; saveOpts(); updateTablePreview(); };
+    $("#tInsert").onclick = () => runAction(insertTable, { label: "Insertion du tableau impossible" });
+    $("#tAuto").onclick = () => { t.seps = autoColumns(wordsInRect(pg.words, t.rect), t.rect); updateTablePreview(); };
     $("#tCancel").onclick = () => { S.table = null; drawOverlay(); updateTablePreview(); };
     drawOverlay();
   }
@@ -753,11 +954,11 @@
     const from = Math.min(t.from, t.to), to = Math.max(t.from, t.to);
     const all = [];
     for (let p = from; p <= to; p++) {
-      status(`Extraction du tableau — page ${p}/${to}…`, "busy");
+      if (to > from) status(`Extraction du tableau — page ${p - from + 1}/${to - from + 1}…`, "busy");
       const pg = await pageText(doc, p, { allowOcr: true });
-      for (const r of extractTable(pg, t.rect, t.seps, S.opts.mergeRows)) all.push({ ...r, page: p });
+      for (const r of extractTable(pg, t.rect, t.seps, S.opts.mergeRows)) if (!(t.excl && t.excl.has(rowKey(p, r)))) all.push({ ...r, page: p });
     }
-    if (!all.length) return status("Aucune ligne extraite.", "warn");
+    if (!all.length) return status("Aucune ligne à insérer.", "warn");
     const nc = t.seps.length + 1;
     const tv = all.map((r) => r.cells.map(typed));
     const values = tv.map((r) => r.map((c) => c.v)), fmts = tv.map((r) => r.map((c) => c.f));
@@ -773,8 +974,10 @@
     await xl.addLinks(made);
     await persistSnips();
     if (S.opts.advance) await xl.select(ac.sheet, ac.row + all.length, ac.col);
-    S.table = null; updateTablePreview(); drawOverlay(); refreshSnipList();
-    status(`Tableau inséré : ${all.length} ligne(s) × ${nc} colonne(s) en ${ac.sheet}!${rangeA1(ac.row, ac.col, all.length, nc)}.`, "ok");
+    S.table = null; S.selSnip = made[0].id; updateTablePreview(); drawOverlay(); refreshSnipList();
+    const addr = rangeA1(ac.row, ac.col, all.length, nc);
+    status(`Tableau inséré : ${all.length} ligne(s) × ${nc} colonne(s) en ${ac.sheet}!${addr}.`, "ok");
+    confirmSnip(`${all.length} ligne(s)`, addr, "table");
   }
 
   /* ---------------- Comment Snip --------------------------------------- */
@@ -797,7 +1000,7 @@
     const ta = $("#cText"); setTimeout(() => ta.focus(), 0);
     ta.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("#cAdd").click(); };
     $("#cCancel").onclick = () => { S.commentDraft = null; panel.hidden = true; drawOverlay(); };
-    $("#cAdd").onclick = () => insertComment(ta.value).catch((e) => status("Commentaire impossible : " + e.message, "err"));
+    $("#cAdd").onclick = () => runAction(() => insertComment(ta.value), { label: "Commentaire impossible" });
   }
 
   async function insertComment(text) {
@@ -944,7 +1147,7 @@
     if (S.opts.store && S.inOffice) {
       for (const d of S.docs.values()) {
         if (d.stored || !d.bytes || d.bytes.length > MAX_STORE_MB * 1048576) continue;
-        await xl.saveDoc(d, (pct) => status(`Enregistrement de « ${d.name} »… ${pct} %`, "busy")); d.stored = true;
+        await xl.saveDoc(d, (pct) => status(`Enregistrement de « ${d.name} »… ${pct} %`, "saving")); d.stored = true;
       }
       refreshDocUI();
     }
@@ -952,10 +1155,6 @@
   }
 
   /* ---------------- Suppression / annulation --------------------------- */
-  async function persistSnips() {
-    try { await xl.saveSnips([...S.snips.values()], S.meta); }
-    catch (e) { console.error(e); status("Snips non enregistrés dans le classeur : " + e.message, "warn"); }
-  }
 
   async function deleteSnips(ids, { clear = false } = {}) {
     const list = ids.map((id) => S.snips.get(id)).filter(Boolean);
@@ -982,10 +1181,8 @@
     switchTab("viewer");
     S.flash = rect ? { docId, page, rect } : null;
     await openDoc(docId, page);
+    scrollToPage(page, rect);
     if (rect) {
-      const v = $("#viewer");
-      v.scrollTop = Math.max(0, rect.y0 * S.scale - 60);
-      v.scrollLeft = Math.max(0, rect.x0 * S.scale - 30);
       setTimeout(() => { if (S.flash && S.flash.rect === rect) { S.flash = null; drawOverlay(); } }, 1700);
     }
     return true;
@@ -1001,6 +1198,7 @@
 
   let selTimer = null;
   function onSelectionChanged() {
+    if (S.win) { winSend({ event: "selection" }); return; }
     clearTimeout(selTimer);
     selTimer = setTimeout(async () => {
       try {
@@ -1018,14 +1216,15 @@
             if (sn && (!hit || sn.created > hit.created)) hit = sn;
           }
         }
-        if (hit && hit.id !== S.selSnip) await goToSnip(hit);
-        else if (!hit && S.opts.autoSearch && info.text) autoSearchCell(info.text);
+        if (hit) { if (S.hitQuery) clearHits(); if (hit.id !== S.selSnip) await goToSnip(hit); }
+        else if (S.opts.autoSearch) { if (info.text) autoSearchCell(info.text); else if (S.hitQuery) clearHits(); }
       } catch (e) { console.warn(e); }
     }, 180);
   }
 
   /* ---------------- Liste des snips ------------------------------------ */
   function refreshSnipList() {
+    S.snipRev = (S.snipRev || 0) + 1; syncSideList();
     const ul = $("#snipList");
     const all = filteredSnips().sort((a, b) => b.created - a.created);
     $("#snipCount").textContent = all.length ? `${all.length} snip(s) dans ce classeur. Cliquez pour voir la preuve et la cellule.` : "Aucun snip pour l'instant.";
@@ -1055,8 +1254,10 @@
     let i = 0;
     for (const doc of docs) {
       try { await openDocData(doc); } catch (e) { status(e.message, "warn"); continue; }
+      const total = docs.reduce((a, d) => a + (d.numPages || 1), 0);
       for (let p = 1; p <= doc.numPages; p++) {
-        onProgress && onProgress(doc, p, ++i);
+        S.prog = { i: ++i, total };
+        try { onProgress && onProgress(doc, p, i); } finally { S.prog = null; }
         const pg = await pageText(doc, p, { allowOcr });
         out.push({ doc, p, pg });
       }
@@ -1091,7 +1292,7 @@
       li.innerHTML = `<div class="grow"><div class="ttl">${esc(t.slice(Math.max(0, r.s - 40), r.s))}<mark>${esc(t.slice(r.s, r.e))}</mark>${esc(t.slice(r.e, r.e + 50))}</div>
         <div class="sub">${esc(r.doc.name)} · page ${r.p}</div></div><button title="Search & Snip : inscrire ce résultat dans la cellule Excel active">Snip</button>`;
       li.querySelector(".grow").onclick = () => goToLocation(r.doc.id, r.p, r.rect);
-      li.querySelector("button").onclick = (ev) => { ev.stopPropagation(); snipSearchResult(r).catch((e) => status("Snip impossible : " + e.message, "err")); };
+      li.querySelector("button").onclick = (ev) => { ev.stopPropagation(); runAction(() => snipSearchResult(r), { label: "Snip impossible" }); };
       ul.appendChild(li);
     }
     drawOverlay();
@@ -1576,11 +1777,14 @@
   /* Interface                                                              */
   /* ====================================================================== */
   function switchTab(name) {
+    const menu = $("#mainMenu"); if (menu) menu.hidden = true;
     $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
     if (name === "docs") refreshDocUI();
     if (name === "snips") refreshSnipList();
     if (name === "viewer") setTimeout(render, 0);
+    if (S.padPanel) S.padPanel();
+    const cf = $("#confirm"); if (cf && name !== "viewer") cf.hidden = true;
   }
 
   function setMode(m) {
@@ -1591,26 +1795,39 @@
     if (m !== "markup" && m !== "note" && S.panelKind === "markup") { $("#ctxPanel").hidden = true; S.panelKind = null; }
     drawOverlay();
     const tips = {
-      nav: "Navigation : cliquez sur une zone colorée pour aller à sa cellule Excel.",
-      text: "Text Snip : sélectionnez une cellule Excel, puis entourez le texte ou le montant dans le document.",
-      sum: "Sum Snip : entourez un ou plusieurs montants (plusieurs zones possibles), puis « Insérer le total ».",
-      valid: "Validation Snip : entourez l'élément vérifié — un ✓ vert est inscrit dans la cellule active.",
-      except: "Exception Snip : entourez l'élément en anomalie — un ✗ rouge est inscrit dans la cellule active.",
-      table: "Table Snip : entourez tout le tableau (sans le titre), ajustez les colonnes puis insérez.",
+      text: "Texte : cliquez un montant ou un mot (double-clic pour la ligne entière), ou entourez une zone.",
+      sum: "Somme : cliquez ou entourez les montants à additionner, puis « Insérer le total ».",
+      valid: "Validation : cliquez l'élément vérifié ; un ✓ est inscrit dans la cellule active.",
+      except: "Exception : cliquez l'élément en anomalie ; un ✗ est inscrit dans la cellule active.",
+      table: "Tableau : cliquez dans le tableau, vérifiez l'aperçu, puis insérez.",
       comment: "Commentaire : entourez la zone concernée, tapez votre remarque — elle devient un commentaire Excel lié à la pièce.",
       markup: "Annotation : choisissez un outil (surligner, texte, flèche, coche, croix, caviarder) puis dessinez sur la pièce.",
       note: "Commentaire sur la pièce : cliquez à l'endroit voulu du document et tapez votre remarque.",
       formfield: "Extraction : entourez la VALEUR à extraire (ex. le numéro de facture), pas son libellé.",
       formkey: "Extraction : entourez le LIBELLÉ qui sert de repère (ex. « Facture n° »).",
     };
-    status(tips[m] || "");
+    // chaque conseil n'apparaît que les deux premières fois
+    let seen = {};
+    try { seen = JSON.parse(localStorage.getItem("snipcompta.tips") || "{}"); } catch (_) { /* ignore */ }
+    if (tips[m] && (seen[m] || 0) < 2) {
+      status(tips[m]); seen[m] = (seen[m] || 0) + 1;
+      try { localStorage.setItem("snipcompta.tips", JSON.stringify(seen)); } catch (_) { /* ignore */ }
+    } else if (m === "nav") status("");
     modeExtras(m);
+    const chip = $("#modeChip");
+    if (chip) {
+      const names = { text: "Texte", sum: "Somme", valid: "Validation", except: "Exception", table: "Tableau", comment: "Commentaire", markup: "Annotation", note: "Bulle", formfield: "Extraction : la valeur", formkey: "Extraction : le repère" };
+      chip.hidden = m === "nav";
+      chip.textContent = (names[m] || m) + " ✕";
+      chip.title = "Outil actif — cliquez (ou Échap) pour revenir à la navigation";
+    }
   }
 
   function loadOpts() {
     try { Object.assign(S.opts, JSON.parse(localStorage.getItem("snipcompta.opts") || "{}")); } catch (_) { /* stockage indisponible */ }
+    if ((S.opts.v || 0) < 5) { S.opts.autoSearch = true; S.opts.v = 5; saveOpts(); }   // v5 : surlignage activé par défaut
     $("#optStore").checked = S.opts.store; $("#optOcr").checked = S.opts.ocr; $("#optAdvance").checked = S.opts.advance;
-    for (const k of ["pasteImport", "autoSearch", "sortFollow"]) { const el = $("#opt_" + k); if (el) { el.checked = !!S.opts[k]; el.onchange = () => { S.opts[k] = el.checked; saveOpts(); }; } }
+    for (const k of ["pasteImport", "autoSearch", "sortFollow", "winOnImport", "cropMargins"]) { const el = $("#opt_" + k); if (el) { el.checked = S.opts[k] !== false && !!S.opts[k]; el.onchange = () => { S.opts[k] = el.checked; saveOpts(); if (k === "cropMargins") render(); }; } }
   }
   function saveOpts() { try { localStorage.setItem("snipcompta.opts", JSON.stringify(S.opts)); } catch (_) { /* ignore */ } }
 
@@ -1618,35 +1835,48 @@
     $$(".tabs button").forEach((b) => (b.onclick = () => switchTab(b.dataset.tab)));
     $$(".modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
     $$("[data-action=import]").forEach((b) => (b.onclick = () => $("#fileInput").click()));
-    $("#fileInput").onchange = (e) => { const fs = [...e.target.files]; e.target.value = ""; importFiles(fs); };
+    $("#fileInput").onchange = (e) => { const fs = [...e.target.files]; e.target.value = ""; hideImport(); runAction(() => importFiles(fs), { label: "Import impossible" }); };
     $("#docSelect").onchange = (e) => e.target.value && openDoc(e.target.value, 1);
-    $("#prevPage").onclick = () => { const d = curDoc(); if (d && S.page > 1) { S.page--; render(); } };
-    $("#nextPage").onclick = () => { const d = curDoc(); if (d && S.page < d.numPages) { S.page++; render(); } };
-    $("#zoomIn").onclick = () => { S.zoom = Math.min(5, S.zoom * 1.25); render(); };
-    $("#zoomOut").onclick = () => { S.zoom = Math.max(0.3, S.zoom / 1.25); render(); };
-    $("#undoBtn").onclick = $("#undoBtn2").onclick = () => undoLast().catch((e) => status("Annulation impossible : " + e.message, "err"));
+    $("#prevPage").onclick = () => { const d = curDoc(); if (d && S.page > 1) scrollToPage(S.page - 1); };
+    $("#nextPage").onclick = () => { const d = curDoc(); if (d && S.page < d.numPages) scrollToPage(S.page + 1); };
+    const zstep = (f) => { const d = curDoc(); if (!d) return; let z = zoomFor(d); if (z === "page") z = 1; setZoom(d, z * f); };
+    $("#zoomIn").onclick = () => zstep(1.2);
+    $("#zoomOut").onclick = () => zstep(1 / 1.2);
+    $("#zoomFitW").onclick = () => setZoom(curDoc(), 1);
+    $("#zoomFitP").onclick = () => setZoom(curDoc(), "page");
+    $("#undoBtn").onclick = $("#undoBtn2").onclick = () => runAction(() => undoLast(), { label: "Annulation impossible" });
     $("#refreshSnips").onclick = async () => { try { await reloadSnips(); status("Snips actualisés.", "ok"); } catch (e) { status(e.message, "err"); } };
-    $("#searchForm").onsubmit = (e) => { e.preventDefault(); doSearch($("#searchInput").value).catch((err) => status("Recherche impossible : " + err.message, "err")); };
+    $("#searchForm").onsubmit = (e) => { e.preventDefault(); runAction(() => doSearch($("#searchInput").value), { label: "Recherche impossible" }); };
     $("#matchRun").onclick = runMatch;
-    $("#sumsRun").onclick = () => findSums().catch((e) => status("Recherche des sommes impossible : " + e.message, "err"));
-    $("#exportBtn").onclick = () => exportSnips().catch((e) => status("Export impossible : " + e.message, "err"));
-    $("#delSelBtn").onclick = () => deleteSnipsInSelection().catch((e) => status("Suppression impossible : " + e.message, "err"));
+    $("#sumsRun").onclick = () => runAction(() => findSums(), { label: "Recherche des sommes impossible" });
+    $("#exportBtn").onclick = () => runAction(() => exportSnips(), { label: "Export impossible" });
+    $("#delSelBtn").onclick = () => runAction(() => deleteSnipsInSelection(), { label: "Suppression impossible" });
     $("#optStore").onchange = (e) => { S.opts.store = e.target.checked; saveOpts(); };
     $("#optOcr").onchange = (e) => { S.opts.ocr = e.target.checked; saveOpts(); };
     $("#optAdvance").onchange = (e) => { S.opts.advance = e.target.checked; saveOpts(); };
+    $("#optTheme").value = S.opts.theme || "auto";
+    $("#optTheme").onchange = (e) => { S.opts.theme = e.target.value; saveOpts(); applyTheme(); };
+    $("#progress .pcancel").onclick = requestCancel;
 
     document.addEventListener("keydown", (e) => {
       if (e.target.matches("input, select, textarea")) return;
       if (e.key === "Enter") {
-        if (S.table) { e.preventDefault(); insertTable().catch((err) => status("Erreur : " + err.message, "err")); }
-        else if (S.sumParts.length) { e.preventDefault(); insertSum().catch((err) => status("Erreur : " + err.message, "err")); }
+        if (S.table) { e.preventDefault(); runAction(() => insertTable()); }
+        else if (S.sumParts.length) { e.preventDefault(); runAction(() => insertSum()); }
       } else if (e.key === "Escape") {
+        if (S.op) requestCancel();
+        if (S.hitQuery) clearHits();
+        hideHover(); hideLive(); $("#confirm").hidden = true;
         S.table = null; S.sumParts = []; S.commentDraft = null; S.selMarkup = null; $("#ctxPanel").hidden = true; hideMenu(); drawOverlay();
       } else if (e.ctrlKey && !e.altKey && ({ ",": 1, ".": 1, "[": 1, "=": 1, "m": 1, "M": 1, "z": 1, "Z": 1 })[e.key]) {
         e.preventDefault();
         const map = { ",": "valid", ".": "except", "[": "sum", "=": "text", m: "table", M: "table" };
-        if (e.key === "z" || e.key === "Z") undoLast().catch((err) => status("Annulation impossible : " + err.message, "err"));
+        if (e.key === "z" || e.key === "Z") runAction(() => undoLast(), { label: "Annulation impossible" });
         else { switchTab("viewer"); setMode(map[e.key]); }
+      } else if (e.key === "F3" && S.hits.length) {
+        e.preventDefault(); gotoHit(S.hitIdx + (e.shiftKey ? -1 : 1));
+      } else if (e.ctrlKey && e.key === "0") {
+        e.preventDefault(); setZoom(curDoc(), 1);
       } else if (e.key === "Delete" && S.selMarkup) {
         deleteMarkup(S.selMarkup);
       } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && !e.ctrlKey && $("#tab-viewer").classList.contains("active")) {
@@ -1661,9 +1891,23 @@
     const v = $("#viewer");
     v.addEventListener("dragover", (e) => { e.preventDefault(); v.classList.add("drop"); });
     v.addEventListener("dragleave", () => v.classList.remove("drop"));
-    v.addEventListener("drop", (e) => { e.preventDefault(); v.classList.remove("drop"); if (e.dataTransfer.files.length) importFiles([...e.dataTransfer.files]); });
+    v.addEventListener("drop", (e) => { e.preventDefault(); v.classList.remove("drop"); if (e.dataTransfer.files.length) { const fs = [...e.dataTransfer.files]; runAction(() => importFiles(fs), { label: "Import impossible" }); } });
     let rt = null;
     window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+    if (typeof ResizeObserver !== "undefined") {
+      // le panneau flottant (somme, tableau…) ne doit jamais cacher le bas du document
+      const cp = $("#ctxPanel");
+      const pad = () => {
+        const h = cp.hidden || !$("#tab-viewer").classList.contains("active") ? 0 : cp.offsetHeight;
+        $("#viewer").style.paddingBottom = h ? h + 24 + "px" : "";
+        document.body.style.setProperty("--panel-h", h ? h + 10 + "px" : "0px");
+      };
+      S.padPanel = pad;
+      new ResizeObserver(pad).observe(cp);
+      new MutationObserver(pad).observe(cp, { attributes: true, attributeFilter: ["hidden"] });
+      let lastW = 0;
+      new ResizeObserver(() => { const w = $("#viewer").clientWidth; if (w && Math.abs(w - lastW) > 2) { lastW = w; clearTimeout(rt); rt = setTimeout(render, 120); } }).observe($("#viewer"));
+    }
     bindOverlay();
   }
 
@@ -1834,7 +2078,7 @@
       if (folders.length) {
         const h = document.createElement("li");
         h.className = "folder";
-        h.innerHTML = `<span class="grow">📁 <b>${esc(label)}</b> <span class="sub">${inG.length} doc.</span></span>${key ? `<button title="Supprimer le dossier (les documents sont conservés)">×</button>` : ""}`;
+        h.innerHTML = `<span class="grow"><b>${esc(label)}</b> <span class="sub">${inG.length} document${inG.length > 1 ? "s" : ""}</span></span>${key ? `<button class="ico sm" title="Supprimer le dossier (les documents sont conservés)"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>` : ""}`;
         const b = h.querySelector("button");
         if (b) b.onclick = () => { S.meta.folders = S.meta.folders.filter((f) => f !== key); for (const d of inG) { d.folder = ""; setDocMeta(d); } persistSoon(); renderDocList(); };
         ul.appendChild(h);
@@ -1846,12 +2090,18 @@
   }
   function docItem(d, folders) {
     const li = document.createElement("li");
+    li.className = "doc" + (d.id === S.cur ? " cur" : "");
     const nSn = [...S.snips.values()].filter((s) => s.rects.some((r) => (r.docId || s.docId) === d.id)).length;
     const p1 = d.pages && d.pages[1];
-    const txt = p1 ? (p1.needsOcr ? (p1.ocrDone ? "OCR fait" : "scan sans texte") : "contient du texte") : "";
-    li.innerHTML = `<div class="grow click"><div class="ttl">${esc(d.name)}</div><div class="sub">${d.numPages ? d.numPages + " p. · " : ""}${nSn} snip(s) · ${d.stored ? "dans le classeur" : "session"}${txt ? " · " + txt : ""}</div></div>
-      <select data-f title="Ranger dans un dossier">${["", ...folders].map((f) => `<option value="${esc(f)}" ${f === (d.folder || "") ? "selected" : ""}>${f ? esc(f) : "—"}</option>`).join("")}</select>
-      <button data-ren title="Renommer">✎</button><button class="danger" data-del>Retirer</button>`;
+    const txt = p1 ? (p1.needsOcr ? (p1.ocrDone ? "scan lu (OCR)" : "scan sans texte") : "") : "";
+    const ext = (/\.([a-z0-9]{2,4})$/i.exec(d.name) || [, d.kind === "pdf" ? "pdf" : "img"])[1].toUpperCase();
+    const meta = [d.numPages ? d.numPages + (d.numPages > 1 ? " pages" : " page") : "", nSn ? nSn + (nSn > 1 ? " snips" : " snip") : "aucun snip", d.stored ? "" : "non enregistré dans le classeur", txt].filter(Boolean).join(", ");
+    li.innerHTML = `<span class="fico" data-ext="${esc(ext)}">${esc(ext.slice(0, 3))}</span>
+      <div class="grow click"><div class="ttl">${esc(d.name)}</div><div class="sub">${esc(meta)}</div></div>
+      <select data-f title="Ranger dans un dossier" aria-label="Dossier">${["", ...folders].map((f) => `<option value="${esc(f)}" ${f === (d.folder || "") ? "selected" : ""}>${f ? esc(f) : "Sans dossier"}</option>`).join("")}</select>
+      <button class="ico sm" data-ren title="Renommer"><svg viewBox="0 0 20 20"><path d="M4 16l1-4 8.5-8.5 3 3L8 15z"/><path d="M11.5 5.5l3 3"/></svg></button>
+      <button class="ico sm del" data-del title="Retirer ce document"><svg viewBox="0 0 20 20"><path d="M4.5 6h11M8 6V4h4v2M6 6l.8 10.5h6.4L14 6"/></svg></button>`;
+    if (!folders.length) li.querySelector("[data-f]").hidden = true;
     const g = li.querySelector(".grow");
     g.onclick = () => { openDoc(d.id); switchTab("viewer"); };
     li.querySelector("[data-f]").onchange = (e) => { d.folder = e.target.value; setDocMeta(d); persistSoon(); renderDocList(); };
@@ -1872,8 +2122,9 @@
     const del = li.querySelector("[data-del]");
     del.onclick = () => {
       if (del.dataset.confirm) { deleteDoc(d.id); return; }
-      del.dataset.confirm = "1"; del.textContent = "Confirmer ?";
-      setTimeout(() => { del.dataset.confirm = ""; del.textContent = "Retirer"; }, 3000);
+      del.dataset.confirm = "1"; del.classList.add("confirm"); del.title = "Cliquez encore pour retirer";
+      status(`Cliquez encore sur la corbeille pour retirer « ${d.name} ».`, "warn");
+      setTimeout(() => { del.dataset.confirm = ""; del.classList.remove("confirm"); del.title = "Retirer ce document"; }, 3000);
     };
     return li;
   }
@@ -1881,10 +2132,10 @@
   async function replaceDocBytes(doc, bytes, mime) {
     doc.bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (mime) doc.mime = mime;
-    doc.pdf = null; doc.img = null; doc.ready = null; doc.pages = {};
+    doc.pdf = null; doc.img = null; doc.ready = null; doc.pages = {}; doc.dims = null; doc.rev = (doc.rev || 0) + 1;
     if (S.inOffice && doc.stored) {
       await xl.deleteDoc(doc.id);
-      await xl.saveDoc(doc, (pct) => status(`Mise à jour de « ${doc.name} » dans le classeur… ${pct} %`, "busy"));
+      await xl.saveDoc(doc, (pct) => status(`Mise à jour de « ${doc.name} » dans le classeur… ${pct} %`, "saving"));
     }
     await openDocData(doc);
     if (S.cur === doc.id) { S.page = clamp(S.page, 1, doc.numPages); await render(); }
@@ -1956,7 +2207,7 @@
       <div class="hint">${n} snip(s) ou annotation(s) pointent vers l'ancienne version. SnipCompta peut les transférer vers la nouvelle (en les recalant sur le même texte quand c'est possible) puis retirer l'ancienne.</div>
       <div class="row"><button class="primary" id="vTr">Transférer vers la nouvelle version</button><button id="vKeep">Garder les deux</button></div>`);
     $("#vKeep").onclick = () => closePanel("version");
-    $("#vTr").onclick = () => transferVersion(oldDoc, newDoc).catch((e) => status("Transfert impossible : " + e.message, "err")).finally(() => closePanel("version"));
+    $("#vTr").onclick = () => runAction(() => transferVersion(oldDoc, newDoc), { label: "Transfert impossible" }).finally(() => closePanel("version"));
   }
   async function transferVersion(oldDoc, newDoc) {
     await openDocData(oldDoc); await openDocData(newDoc);
@@ -2171,7 +2422,7 @@
     const rb = $("#mkRedact");
     if (rb) rb.onclick = () => {
       if (!rb.dataset.confirm) { rb.dataset.confirm = "1"; rb.textContent = "Confirmer : c'est définitif"; return; }
-      applyRedactions(curDoc()).catch((e) => status("Caviardage impossible : " + e.message, "err"));
+      runAction(() => applyRedactions(curDoc()), { label: "Caviardage impossible" });
     };
   }
   async function applyRedactions(doc) {
@@ -2323,7 +2574,7 @@
     await xl.addLinks([sn]); await persistSnips();
     if (S.opts.advance) await xl.select(ac.sheet, ac.row + 1, ac.col);
     S.selSnip = id; drawOverlay(); refreshSnipList();
-    status(`${STYLE[type].name} → ${ac.sheet}!${address} (valeur conservée : ${fmtVal(cur)}).`, "ok");
+    confirmSnip(fmtVal(cur), address, type);
   }
   function snipAt(pt) {
     const doc = curDoc(); let hit = null;
@@ -2341,7 +2592,7 @@
     const m = $("#ctxMenu"); m.innerHTML = "";
     for (const [label, fn] of items) {
       const b = document.createElement("button"); b.textContent = label;
-      b.onclick = () => { hideMenu(); Promise.resolve().then(fn).catch((e) => status(e.message, "err")); };
+      b.onclick = () => { hideMenu(); runAction(fn); };
       m.appendChild(b);
     }
     m.hidden = false;
@@ -2350,8 +2601,10 @@
   }
   function hideMenu() { const m = $("#ctxMenu"); if (m) m.hidden = true; }
   function bindContextMenu() {
-    $("#overlay").addEventListener("contextmenu", (e) => {
-      if (!curDoc()) return;
+    $("#pages").addEventListener("contextmenu", (e) => {
+      const ov = e.target.closest(".ov");
+      if (!curDoc() || !ov) return;
+      S.page = +ov.dataset.p;
       const pt = evPt(e), sn = snipAt(pt), mk = markupAt(pt);
       if (!sn && !mk) return;
       e.preventDefault();
@@ -2390,7 +2643,8 @@
     for (const t of terms) {
       let k = ln.indexOf(t);
       while (k >= 0) {
-        const bad = (/^\d/.test(t) && /\d/.test(ln[k - 1] || "")) || (/\d$/.test(t) && /\d/.test(ln[k + t.length] || ""));
+        const bad = (/^\d/.test(t) && (/\d/.test(ln[k - 1] || "") || /\d[.,]$/.test(ln.slice(Math.max(0, k - 2), k)))) ||
+          (/\d$/.test(t) && (/\d/.test(ln[k + t.length] || "") || /^[.,]\d/.test(ln.slice(k + t.length, k + t.length + 2))));
         if (!bad && !found.some(([s, e]) => s < k + t.length && e > k)) found.push([k, k + t.length]);
         k = ln.indexOf(t, k + 1);
       }
@@ -2403,26 +2657,92 @@
     const tv = typed(r.L.text.slice(r.s, r.e));
     await placeSnip("text", tv.v, [{ docId: r.doc.id, page: r.p, ...r.rect }], tv.f);
   }
-  let autoTimer = null;
+  /* --- Clic sur une cellule Excel : surligner sa valeur dans la pièce ouverte --- */
+  let autoTimer = null, autoSeq = 0;
+  function cellQuery(text) {
+    const raw = String(text ?? "").trim();
+    const clean = raw.replace(/\s?(€|EUR|\$|USD|£|CHF)$/i, "").replace(/^(€|\$|£)\s?/, "").trim();
+    const date = isDateLike(clean);
+    const amt = date ? null : parseAmount(clean);
+    return { raw, clean, amt, terms: amt != null ? [] : searchTerms(clean) };
+  }
+  function hitsInDoc(doc, q, pages) {
+    const out = [];
+    for (const { p, pg } of pages) for (const L of pg.lines) {
+      for (const [s, e] of findInLine(L, q.terms, null)) out.push({ docId: doc.id, page: p, rect: spanBBox(L, s, e) });
+      if (q.amt != null) for (const a of findAmounts(L.text)) {
+        const ws = L.words.filter((w) => w.end > a.start && w.start < a.end);
+        if (ws.length === 1 && /[A-Za-zÀ-ÿ]/.test(ws[0].str)) continue;
+        if (Math.abs(Math.abs(a.value) - Math.abs(q.amt)) < 0.005) out.push({ docId: doc.id, page: p, rect: spanBBox(L, a.start, a.end) });
+      }
+    }
+    return out.sort((a, b) => a.page - b.page || a.rect.y0 - b.rect.y0 || a.rect.x0 - b.rect.x0);
+  }
+  async function docPages(doc) {
+    await openDocData(doc);
+    const out = [];
+    for (let p = 1; p <= doc.numPages; p++) out.push({ p, pg: await pageText(doc, p, { allowOcr: false }) });
+    return out;
+  }
   function autoSearchCell(text) {
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(async () => {
-      const q = String(text).trim();
-      if (q.length < 2) { if (S.hits.length) { S.hits = []; drawOverlay(); } return; }
-      const terms = searchTerms(q), qAmt = isDateLike(q) ? null : parseAmount(q);
-      const hits = [];
-      for (const doc of S.docs.values()) {
-        if (!doc.pdf && !doc.img) continue;
-        for (let p = 1; p <= doc.numPages && hits.length < 200; p++) {
-          const pg = await pageText(doc, p, { allowOcr: false });
-          for (const L of pg.lines) for (const [s, e] of findInLine(L, terms, qAmt)) hits.push({ docId: doc.id, page: p, rect: spanBBox(L, s, e) });
-        }
+    const seq = ++autoSeq;
+    autoTimer = setTimeout(() => cellHighlight(text, seq).catch((e) => console.warn(e)), 120);
+  }
+  async function cellHighlight(text, seq = ++autoSeq) {
+    const q = cellQuery(text);
+    const doc = curDoc();
+    if (!doc || q.clean.length < (q.amt != null ? 1 : 2) || (q.amt != null && q.amt === 0)) { clearHits(); return; }
+    const hits = hitsInDoc(doc, q, await docPages(doc));
+    if (seq !== autoSeq) return;                       // une autre cellule a été cliquée entre-temps
+    S.hits = hits; S.hitIdx = 0; S.hitQuery = q.raw;
+    let others = [];
+    if (!hits.length) {
+      for (const d of S.docs.values()) {
+        if (d === doc || (!d.bytes && !d.pdf && !d.img && !d.stored)) continue;
+        try { const h = hitsInDoc(d, q, await docPages(d)); if (h.length) others.push({ doc: d, n: h.length, first: h[0] }); } catch (_) { /* pièce illisible */ }
+        if (seq !== autoSeq) return;
       }
-      S.hits = hits;
-      if (!hits.length) { drawOverlay(); status(`« ${q} » : introuvable dans les pièces ouvertes.`); return; }
-      if (!hits.some((h) => h.docId === S.cur && h.page === S.page)) await openDoc(hits[0].docId, hits[0].page); else drawOverlay();
-      status(`« ${q} » : ${hits.length} occurrence(s) surlignée(s) dans les pièces.`, "ok");
-    }, 250);
+    }
+    showHitBar(others);
+    drawOverlay();
+    if (hits.length && !hitVisible(hits[0])) gotoHit(0);
+  }
+  function hitVisible(h) {
+    const v = $("#viewer"), el = pageEl(h.page); if (!el || h.docId !== S.cur) return false;
+    const top = el.offsetTop + h.rect.y0 * S.scale, bot = el.offsetTop + h.rect.y1 * S.scale;
+    return top >= v.scrollTop && bot <= v.scrollTop + v.clientHeight - 30;
+  }
+  function gotoHit(i) {
+    if (!S.hits.length) return;
+    S.hitIdx = (i + S.hits.length) % S.hits.length;
+    const h = S.hits[S.hitIdx];
+    scrollToPage(h.page, h.rect);
+    drawOverlay(); showHitBar();
+  }
+  function clearHits() {
+    autoSeq++;
+    if (S.hits.length || S.hitQuery) { S.hits = []; S.hitQuery = ""; drawOverlay(); }
+    const b = $("#hitBar"); if (b) b.hidden = true;
+  }
+  function showHitBar(others = null) {
+    const b = $("#hitBar"); if (!b) return;
+    if (!S.hitQuery) { b.hidden = true; return; }
+    const n = S.hits.length;
+    b.hidden = false;
+    b.classList.toggle("none", !n);
+    let html = `<span class="hq">« ${esc(S.hitQuery.length > 24 ? S.hitQuery.slice(0, 22) + "…" : S.hitQuery)} »</span>`;
+    if (n) html += `<span class="hn">${n > 1 ? `${S.hitIdx + 1} / ${n}` : "1 fois"}</span>` +
+      (n > 1 ? `<button class="ico sm" data-h="-1" title="Précédent (Maj+F3)"><svg viewBox="0 0 20 20"><path d="M5 12l5-5 5 5"/></svg></button><button class="ico sm" data-h="1" title="Suivant (F3)"><svg viewBox="0 0 20 20"><path d="M5 8l5 5 5-5"/></svg></button>` : "");
+    else {
+      html += `<span class="hn">absent de cette pièce</span>`;
+      if (others && others.length) html += others.slice(0, 2).map((o, i) => `<button class="link" data-o="${i}" title="Ouvrir cette pièce">${esc(o.doc.name)} (${o.n})</button>`).join("");
+    }
+    html += `<button class="ico sm" data-x title="Effacer le surlignage (Échap)"><svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></svg></button>`;
+    b.innerHTML = html;
+    $$("[data-h]", b).forEach((x) => (x.onclick = () => gotoHit(S.hitIdx + +x.dataset.h)));
+    $$("[data-o]", b).forEach((x) => (x.onclick = async () => { const o = others[+x.dataset.o]; await openDoc(o.doc.id, o.first.page); cellHighlight(S.hitQuery); }));
+    $("[data-x]", b).onclick = clearHits;
   }
 
   /* ---------------- Liste des snips : filtres, liens multiples, tri -------- */
@@ -3093,16 +3413,46 @@
   });
 
   /* ---------------- Liaison de l'interface V2 ---------------------------- */
+  function showImport() { const sh = $("#importSheet"); if (sh && S.docs.size) { sh.hidden = false; setTimeout(() => $("#importBig").focus(), 0); } }
+  function hideImport() { const sh = $("#importSheet"); if (sh) sh.hidden = true; }
+  function bindPanel() {
+    const menu = $("#mainMenu");
+    $("#menuBtn").onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    document.addEventListener("click", (e) => { if (!menu.hidden && !e.target.closest("#mainMenu") && !e.target.closest("#menuBtn")) menu.hidden = true; });
+    $$("#mainMenu [data-tab]").forEach((b) => (b.onclick = () => switchTab(b.dataset.tab)));
+    $$("#mainMenu [data-action]").forEach((b) => b.addEventListener("click", () => { menu.hidden = true; }));
+    $$("[data-back]").forEach((b) => (b.onclick = () => switchTab("viewer")));
+    $("#topSearch").onsubmit = (e) => {
+      e.preventDefault();
+      const q = $("#topSearchInput").value.trim(); if (!q) return;
+      $("#searchInput").value = q; switchTab("search");
+      runAction(() => doSearch(q), { label: "Recherche impossible" });
+    };
+    const tb = $(".topbar");
+    const openSearch = () => { tb.classList.add("searching"); setTimeout(() => $("#topSearchInput").focus(), 0); };
+    const closeSearch = () => { tb.classList.remove("searching"); $("#topSearchInput").value = ""; };
+    $("#searchToggle").onclick = openSearch;
+    $("#searchClose").onclick = closeSearch;
+    $("#topSearchInput").onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); closeSearch(); } };
+    document.addEventListener("keydown", (e) => { if (e.ctrlKey && (e.key === "f" || e.key === "F")) { e.preventDefault(); openSearch(); } });
+    $("#modeChip").onclick = () => setMode("nav");
+    $("#importClose").onclick = hideImport;
+    if (S.isWindow) document.body.classList.add("window");
+    else if (S.inOffice) document.body.classList.add("in-office"); else document.body.classList.add("demo");
+    $("#winBtn").onclick = () => (S.isWindow ? parentSend({ event: "dock" }) : openWindow());
+    $("#winBack").onclick = () => closeWindow();
+  }
   function bindExtras() {
+    bindPanel();
     bindContextMenu();
     renderStyleBox();
     // import de dossiers, dossiers de rangement
     $$("[data-action=importFolder]").forEach((b) => (b.onclick = () => $("#folderInput").click()));
     $("#folderInput").onchange = (e) => {
       const fs = [...e.target.files].filter((f) => SUPPORTED_RE.test(f.name) || TEXT_RE.test(f.name) || /\.zip$/i.test(f.name));
-      e.target.value = "";
+      e.target.value = ""; hideImport();
       if (!fs.length) return status("Aucun fichier pris en charge dans ce dossier.", "warn");
-      importFiles(fs);
+      runAction(() => importFiles(fs), { label: "Import impossible" });
     };
     $("#importFolderSel").onchange = (e) => { S.importFolder = e.target.value; };
     $("#addFolder").onclick = () => {
@@ -3111,7 +3461,7 @@
       $("#newFolder").value = ""; S.importFolder = v; persistSoon(); renderDocList();
     };
     // actions sur les documents
-    const run = (fn, label) => () => Promise.resolve().then(fn).catch((e) => status(`${label} impossible : ${e.message}`, "err"));
+    const run = (fn, label) => () => runAction(fn, { label: label + " impossible" });
     $("#expAnnCur").onclick = run(() => exportAnnotated(false), "Export");
     $("#expAnnAll").onclick = run(() => exportAnnotated(true), "Export");
     $("#rmNoSnips").onclick = run(() => { const d = curDoc(); if (!d) throw new Error("ouvrez un document"); return removePages(d, false); }, "Suppression de pages");
@@ -3121,7 +3471,7 @@
     document.addEventListener("paste", (e) => {
       if (!S.opts.pasteImport || e.target.matches("input, textarea")) return;
       const fs = [...((e.clipboardData && e.clipboardData.files) || [])];
-      if (fs.length) { e.preventDefault(); importFiles(fs); }
+      if (fs.length) { e.preventDefault(); runAction(() => importFiles(fs), { label: "Import impossible" }); }
     });
     // liste des snips
     $("#snipFilter").onchange = async (e) => {
@@ -3181,23 +3531,627 @@
   }
 
   /* ====================================================================== */
+  /* Fenêtre de document indépendante (boîte de dialogue Office)            */
+  /*  - la fenêtre affiche la visionneuse complète ;                        */
+  /*  - elle ne peut pas écrire dans Excel : chaque opération Excel est     */
+  /*    relayée au panneau (« hub »), qui l'exécute et renvoie le résultat. */
+  /* ====================================================================== */
+  const IS_WINDOW = /[?&]window=1(&|$)/.test(location.search);
+  S.win = null; S.isWindow = IS_WINDOW;
+  let RPC_CH = 48000;
+  function rpcSend(str, fn) {
+    if (str.length <= RPC_CH) { fn(str); return; }
+    const cid = uid(), n = Math.ceil(str.length / RPC_CH);
+    for (let i = 0; i < n; i++) fn(JSON.stringify({ __c: cid, i, n, d: str.slice(i * RPC_CH, (i + 1) * RPC_CH) }));
+  }
+  const rpcBuf = new Map();
+  function rpcRecv(raw, onMsg) {
+    let m;
+    try { m = JSON.parse(raw); } catch (_) { return; }
+    if (m && m.__c) {
+      let b = rpcBuf.get(m.__c);
+      if (!b) { b = { parts: new Array(m.n), got: 0 }; rpcBuf.set(m.__c, b); }
+      if (b.parts[m.i] == null) { b.parts[m.i] = m.d; b.got++; }
+      if (b.got === m.n) { rpcBuf.delete(m.__c); rpcRecv(b.parts.join(""), onMsg); }
+      return;
+    }
+    onMsg(m);
+  }
+
+  /* ---- côté panneau ---- */
+  let HUBXL = null;
+  let winSendRaw = (s) => { if (S.win) S.win.messageChild(s); };
+  function winSend(obj) { if (S.win) rpcSend(JSON.stringify(obj), winSendRaw); }
+  async function hubHandle(m) {
+    if (!m) return;
+    if (m.event === "ready") { applyTheme(); return; }
+    if (m.event === "winSize") { storeWinSize({ w: m.w, h: m.h }); return; }
+    if (m.event === "dock") { closeWindow(); return; }
+    const { id, op, args = [] } = m;
+    if (!id) return;
+    const reply = (o) => winSend({ id, ...o });
+    try {
+      let res;
+      if (op === "hubDocs") res = [...S.docs.values()].map((d) => ({ id: d.id, name: d.name, mime: d.mime, stored: !!d.stored, folder: d.folder || "" }));
+      else if (op === "hubDocBytes") {
+        const d = S.docs.get(args[0]);
+        let b = d && d.bytes;
+        if (!b && d) b = await HUBXL.loadDocBytes(d.id);
+        res = b ? toB64(b) : null;
+      } else if (op === "saveDoc") {
+        const d = args[0];
+        await HUBXL.saveDoc({ id: d.id, name: d.name, mime: d.mime, bytes: fromB64(d.b64) });
+        res = true;
+      } else if (typeof HUBXL[op] === "function") res = await HUBXL[op](...args);
+      else throw new Error("opération inconnue : " + op);
+      reply({ ok: true, res: res === undefined ? null : res });
+    } catch (e) { reply({ ok: false, err: (e && e.message) || String(e), code: (e && e.code) || "" }); }
+  }
+  function updateWinBtn() {
+    const b = $("#winBtn"); if (!b) return;
+    b.title = S.isWindow ? "Ramener le document dans le panneau" : (S.win ? "Le document est ouvert dans la fenêtre séparée" : "Ouvrir le document dans une fenêtre séparée (agrandissable)");
+    b.classList.toggle("on", !!S.win);
+  }
+  function openWindow() {
+    if (S.isWindow) return;
+    if (!S.inOffice || typeof Office === "undefined" || !Office.context || !Office.context.ui || !Office.context.ui.displayDialogAsync) return status("La fenêtre séparée n'est disponible que dans Excel.", "warn");
+    if (!Office.context.requirements.isSetSupported("DialogApi", "1.2")) return status("Votre version d'Excel ne permet pas la fenêtre séparée (mise à jour Microsoft 365 nécessaire).", "warn");
+    if (S.win) return status("Le document est déjà ouvert dans la fenêtre séparée.", "ok");
+    HUBXL = OfficeXL;
+    const url = new URL("taskpane.html", location.href);
+    url.search = "";
+    url.searchParams.set("window", "1");
+    if (S.cur) { url.searchParams.set("doc", S.cur); url.searchParams.set("page", String(S.page)); }
+    url.searchParams.set("v", BUILD);
+    const size = savedWinSize();
+    Office.context.ui.displayDialogAsync(url.href, { width: size.w, height: size.h, displayInIframe: false }, (r) => {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) return status("Ouverture de la fenêtre impossible : " + ((r.error && r.error.message) || "erreur inconnue"), "err");
+      S.win = r.value;
+      S.win.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => rpcRecv(arg.message, hubHandle));
+      S.win.addEventHandler(Office.EventType.DialogEventReceived, () => onWindowClosed());
+      $("#winBanner").hidden = false; updateWinBtn();
+      status("Document ouvert dans une fenêtre séparée : déplacez-la, agrandissez-la ou posez-la sur un autre écran.", "ok");
+    });
+  }
+  function closeWindow() {
+    const w = S.win;
+    if (w) { try { w.close(); } catch (_) { /* déjà fermée */ } }
+    onWindowClosed();
+  }
+  async function onWindowClosed() {
+    if (!S.win) return;
+    S.win = null;
+    $("#winBanner").hidden = true; updateWinBtn();
+    try { await hubRefresh(); } catch (e) { console.warn(e); }
+  }
+  async function hubRefresh() {
+    const docs = await xl.listDocs();
+    for (const d of docs) if (!S.docs.has(d.id)) S.docs.set(d.id, { ...d, kind: kindOf(d.name, d.mime), bytes: null, pages: {}, stored: true });
+    for (const [id, d] of [...S.docs]) if (d.stored && !docs.some((x) => x.id === id)) S.docs.delete(id);
+    applyDocMeta();
+    await reloadSnips(); refreshDocUI(); render();
+  }
+
+  /* ---- côté fenêtre ---- */
+  const pending = new Map();
+  let winSelCb = null;
+  let parentSendRaw = null; // remplaçable (tests)
+  function parentSend(obj) {
+    const f = parentSendRaw || window.__rpcToHub || ((s) => Office.context.ui.messageParent(s));
+    rpcSend(JSON.stringify(obj), f);
+  }
+  function rcall(op, args) {
+    return new Promise((resolve, reject) => {
+      const id = uid();
+      pending.set(id, { resolve, reject });
+      parentSend({ id, op, args });
+    });
+  }
+  async function windowRecv(m) {
+    if (!m) return;
+    if (m.id && pending.has(m.id)) {
+      const p = pending.get(m.id); pending.delete(m.id);
+      if (m.ok) p.resolve(m.res); else { const er = new Error(m.err); if (m.code) er.code = m.code; p.reject(er); }
+      return;
+    }
+    if (m.event === "selection") { if (winSelCb) winSelCb(); }
+    else if (m.event === "action") { const fn = getActions()[m.name]; if (fn) runAction(fn); }
+    else if (m.event === "open") { if (S.docs.has(m.doc)) openDoc(m.doc, m.page || 1); }
+    else if (m.event === "reloadDocs") { await windowLoadDocs(); }
+    else if (m.event === "status") { status(m.msg, m.kind); }
+    else if (m.event === "theme") { S.hubDark = !!m.dark; applyTheme(); }
+  }
+  const REMOTE_OPS = ["activeCell", "write", "select", "selectAddr", "selected", "format", "addLinks", "removeLinks", "selectionInfo", "saveSnips", "loadSnips",
+    "listDocs", "deleteDoc", "readCell", "addComment", "exportAudit", "newSheet", "writeCells", "readRange", "usedAddress", "sheetNameById", "relink"];
+  const RemoteXL = {};
+  for (const op of REMOTE_OPS) RemoteXL[op] = (...args) => rcall(op, args);
+  RemoteXL.saveDoc = (doc) => rcall("saveDoc", [{ id: doc.id, name: doc.name, mime: doc.mime, b64: toB64(doc.bytes) }]);
+  RemoteXL.loadDocBytes = async (id) => { const b = await rcall("hubDocBytes", [id]); return b ? fromB64(b) : null; };
+  RemoteXL.onSelection = (cb) => { winSelCb = cb; };
+  async function windowLoadDocs() {
+    const docs = await rcall("hubDocs", []);
+    let added = 0;
+    for (const d of docs) if (!S.docs.has(d.id)) { S.docs.set(d.id, { ...d, kind: kindOf(d.name, d.mime), bytes: null, pages: {} }); added++; }
+    refreshDocUI();
+    if (added && !S.cur) await openDoc(docs[0].id);
+    return docs;
+  }
+  async function initWindow() {
+    document.body.classList.add("window");
+    if (typeof Office !== "undefined" && Office.context && Office.context.ui && Office.context.ui.addHandlerAsync)
+      Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => rpcRecv(arg.message, windowRecv));
+    parentSend({ event: "ready" });
+    status("Chargement des documents…", "busy");
+    const docs = await windowLoadDocs();
+    await reloadSnips();
+    refreshDocUI();
+    const q = new URLSearchParams(location.search), id = q.get("doc");
+    if (id && S.docs.has(id)) await openDoc(id, +q.get("page") || 1);
+    else if (docs.length) await openDoc(docs[0].id);
+    status(docs.length ? "Fenêtre prête : agrandissez-la comme vous voulez." : "Importez vos pièces pour commencer.", "ok");
+  }
+
+  /* ====================================================================== */
+  /* Ergonomie : snip en un clic, survol, bulles de confirmation            */
+  /* ====================================================================== */
+  const CLICK_MODES = new Set(["text", "sum", "valid", "except", "comment", "table"]);
+  function lineAt(pg, pt, tol = 1.5) {
+    let best = null, bd = Infinity;
+    for (const L of pg.lines || []) {
+      if (pt.y < L.y0 - tol || pt.y > L.y1 + tol) continue;
+      const dx = pt.x < L.x0 ? L.x0 - pt.x : pt.x > L.x1 ? pt.x - L.x1 : 0;
+      if (dx < bd) { bd = dx; best = L; }
+    }
+    return best && bd <= 6 ? best : null;
+  }
+  const cleanWord = (s) => s.replace(/^[(\[«"'“]+|[)\]»"'”,;:!?]+$/g, "").replace(/\.$/, "") || s;
+  /** Ce qui se trouve sous le pointeur : un montant, sinon un mot (ou la ligne entière). */
+  function targetAt(pg, pt, level = "auto") {
+    const L = lineAt(pg, pt); if (!L) return null;
+    if (level === "line") return { kind: "line", text: L.text, rect: bboxOf(L.words, 2), line: L };
+    for (const a of findAmounts(L.text)) {
+      const ws = L.words.filter((w) => w.end > a.start && w.start < a.end);
+      if (ws.length === 1 && /[A-Za-zÀ-ÿ]/.test(ws[0].str)) continue;   // « FAC-2024-001 » n'est pas un montant
+      const bb = spanBBox(L, a.start, a.end);
+      if (pt.x >= bb.x0 - 2 && pt.x <= bb.x1 + 2) return { kind: "amount", text: L.text.slice(a.start, a.end), value: a.value, rect: bb, line: L };
+    }
+    let w = null, wd = Infinity;
+    for (const x of L.words) { const d = pt.x < x.x0 ? x.x0 - pt.x : pt.x > x.x1 ? pt.x - x.x1 : 0; if (d < wd) { wd = d; w = x; } }
+    if (!w || wd > 3) return null;
+    return { kind: "word", text: cleanWord(w.str), rect: bboxOf([w], 1.5), line: L };
+  }
+  function amountsIn(ws) {
+    let amts = [];
+    for (const L of groupLines(ws)) for (const a of findAmounts(L.text)) amts.push({ ...a, bbox: spanBBox(L, a.start, a.end) });
+    if (amts.some((a) => a.hasDec)) amts = amts.filter((a) => a.hasDec);
+    return amts;
+  }
+
+  /* --- survol : on surligne ce qui sera capturé --- */
+  let hovEl = null;
+  function hideHover() { if (hovEl) { hovEl.remove(); hovEl = null; } }
+  function hoverAt(e) {
+    const ov = e.target && e.target.closest && e.target.closest(".ov");
+    const doc = curDoc();
+    if (!ov || !doc || !CLICK_MODES.has(S.mode) || e.target.classList.contains("sep")) { hideHover(); return; }
+    const p = +ov.dataset.p, pg = doc.pages[p];
+    if (!pg || !pg.lines) { if (!pg) pageText(doc, p, { allowOcr: false }).catch(() => {}); return; }
+    const pt = evPt(e, ov);
+    let r = null, kind = "";
+    if (S.mode === "table") {
+      const t = S.table;
+      if (t && t.docId === doc.id && t.page === p && pt.x > t.rect.x0 && pt.x < t.rect.x1 && pt.y > t.rect.y0 && pt.y < t.rect.y1) { hideHover(); return; }
+      r = tableRectAt(pg, pt); kind = "table";
+    } else { const t = targetAt(pg, pt); if (t) { r = t.rect; kind = t.kind; } }
+    if (!r) { hideHover(); return; }
+    if (!hovEl) { hovEl = document.createElement("div"); hovEl.className = "hov"; }
+    if (hovEl.parentNode !== ov) ov.appendChild(hovEl);
+    hovEl.dataset.kind = kind;
+    hovEl.style.left = r.x0 * S.scale + "px"; hovEl.style.top = r.y0 * S.scale + "px";
+    hovEl.style.width = (r.x1 - r.x0) * S.scale + "px"; hovEl.style.height = (r.y1 - r.y0) * S.scale + "px";
+  }
+
+  /* --- valeur en direct pendant le glisser --- */
+  function liveValue(r, e) {
+    const el = $("#live"); if (!el) return;
+    if (!["text", "sum"].includes(S.mode)) return;
+    const doc = curDoc(), pg = doc && doc.pages[S.page]; if (!pg || !pg.words) return;
+    const ws = wordsInRect(pg.words, r);
+    let txt = "";
+    if (S.mode === "sum") { const a = amountsIn(ws); if (a.length) txt = `Σ ${fmtNum(round2(a.reduce((s, x) => s + x.value, 0)))}  (${a.length} montant${a.length > 1 ? "s" : ""})`; }
+    else { const s = joinWords(ws); if (s) { const tv = typed(s); txt = tv.f === NUMFMT ? fmtNum(tv.v) : String(tv.v); } }
+    if (!txt) { el.hidden = true; return; }
+    el.textContent = txt.length > 70 ? txt.slice(0, 68) + "…" : txt;
+    el.hidden = false;
+    placeFloat(el, e.clientX + 16, e.clientY + 18);
+  }
+  function hideLive() { const el = $("#live"); if (el) el.hidden = true; }
+  function placeFloat(el, x, y) {
+    const w = el.offsetWidth || 160, h = el.offsetHeight || 30;
+    el.style.left = clamp(x, 6, Math.max(6, innerWidth - w - 6)) + "px";
+    el.style.top = clamp(y, 6, Math.max(6, innerHeight - h - 6)) + "px";
+  }
+
+  /* --- bulle « 1 484,86 → B3 ✓  Annuler » --- */
+  let confirmTimer = null;
+  function confirmSnip(valueText, cell, kind) {
+    const el = $("#confirm"); if (!el) return;
+    status("");
+    el.innerHTML = `<span class="cv"></span><span class="arr">→</span><b></b><span class="tick">✓</span><button class="link">Annuler</button>`;
+    $(".cv", el).textContent = String(valueText).length > 40 ? String(valueText).slice(0, 38) + "…" : valueText;
+    $("b", el).textContent = cell;
+    el.dataset.kind = kind || "";
+    $("button", el).onclick = () => { el.hidden = true; runAction(undoLast, { label: "Annulation impossible" }); };
+    el.hidden = false; el.classList.remove("show"); void el.offsetWidth; el.classList.add("show");
+    const anchor = S.selSnip && $(`#pages .ovbox.sel`);
+    if (anchor) { const r = anchor.getBoundingClientRect(); placeFloat(el, r.left, r.top - el.offsetHeight - 10); }
+    else if (S.lastPointer) placeFloat(el, S.lastPointer.x + 14, S.lastPointer.y - 46);
+    else placeFloat(el, innerWidth / 2 - el.offsetWidth / 2, innerHeight - el.offsetHeight - 70);
+    clearTimeout(confirmTimer);
+    const arm = () => { confirmTimer = setTimeout(() => { el.hidden = true; }, 4000); };
+    el.onmouseenter = () => clearTimeout(confirmTimer); el.onmouseleave = arm;
+    arm();
+  }
+
+  /* --- clic simple = montant ou mot ; double-clic = ligne entière --- */
+  let clickTimer = null, lastClick = null;
+  function queueClickSnip(pt, e) {
+    const p = S.page, now = Date.now(), ctrl = !!(e && e.ctrlKey);
+    if (S.mode === "table") { runAction(() => clickSnip(pt, p, "auto", ctrl)); return; }
+    if (lastClick && now - lastClick.t < 330 && lastClick.p === p && Math.hypot(pt.x - lastClick.pt.x, pt.y - lastClick.pt.y) * S.scale < 10) {
+      clearTimeout(clickTimer); lastClick = null;
+      runAction(() => clickSnip(pt, p, "line", ctrl));
+      return;
+    }
+    lastClick = { t: now, pt, p };
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => { lastClick = null; runAction(() => clickSnip(pt, p, "auto", ctrl)); }, 280);
+  }
+  async function clickSnip(pt, p, level, ctrl) {
+    const doc = curDoc(); if (!doc) return;
+    S.page = p;
+    const pg = await pageText(doc, p, { allowOcr: true });
+    if (S.mode === "table") return detectTableAt(pg, pt, p);
+    const t = targetAt(pg, pt, level);
+    if (!t) {
+      if (S.mode === "valid" || S.mode === "except") return handleRect({ x0: pt.x - 7, y0: pt.y - 7, x1: pt.x + 7, y1: pt.y + 7 }, { click: true, ctrl });
+      return status(pg.needsOcr && !pg.ocrDone ? "Page scannée : le texte n'a pas encore été reconnu (OCR désactivé dans les réglages ?)." : "Cliquez sur un montant ou un mot (double-clic = toute la ligne), ou dessinez un cadre.", "warn");
+    }
+    if (S.mode === "text" && !ctrl) return doTextSnip(t.rect, t);
+    return handleRect(t.rect, { click: true, target: t, ctrl });
+  }
+
+  /* ====================================================================== */
+  /* Tableau détecté en un clic                                             */
+  /* ====================================================================== */
+  function lineSegments(L) {
+    let n = 1;
+    for (let i = 1; i < L.words.length; i++) if (L.words[i].x0 - L.words[i - 1].x1 > Math.max(6, 1.1 * L.h)) n++;
+    return n;
+  }
+  const isTabular = (L) => lineSegments(L) >= 2 || findAmounts(L.text).some((a) => a.hasDec);
+  function tableRectAt(pg, pt) {
+    pg._tbl = pg._tbl || new Map();
+    const lines = pg.lines || [];
+    let L0 = lineAt(pg, pt, 4);
+    if (!L0) {
+      let bd = 14;
+      for (const L of lines) { const d = Math.min(Math.abs(pt.y - L.y0), Math.abs(pt.y - L.y1)); if (d < bd && pt.x >= L.x0 - 20 && pt.x <= L.x1 + 20) { bd = d; L0 = L; } }
+    }
+    if (!L0) return null;
+    if (pg._tbl.has(L0)) return pg._tbl.get(L0);
+    const i0 = lines.indexOf(L0);
+    const hs = lines.map((L) => L.y1 - L.y0).sort((a, b) => a - b);
+    const med = hs[Math.floor(hs.length / 2)] || 10;
+    const near = (a, b) => b.y0 - a.y1 <= Math.max(2.4 * med, 14) && Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > -10;
+    let lo = i0, hi = i0;
+    for (let j = i0 + 1, miss = 0; j < lines.length; j++) {
+      if (!near(lines[j - 1], lines[j])) break;
+      if (isTabular(lines[j])) { hi = j; miss = 0; } else if (++miss > 1) break;
+    }
+    for (let j = i0 - 1, miss = 0; j >= 0; j--) {
+      if (!near(lines[j], lines[j + 1])) break;
+      if (isTabular(lines[j])) { lo = j; miss = 0; } else if (++miss > 1) break;
+    }
+    let r = null;
+    if (hi > lo || isTabular(L0)) r = bboxOf(lines.slice(lo, hi + 1).flatMap((L) => L.words), 3);
+    pg._tbl.set(L0, r);
+    return r;
+  }
+  async function detectTableAt(pg, pt, p) {
+    const r = tableRectAt(pg, pt);
+    if (!r) return status("Aucun tableau ici : cliquez sur une ligne du tableau, ou dessinez un cadre autour.", "warn");
+    hideHover();
+    await startTable(r, p);
+  }
+
+  /* ====================================================================== */
+  /* Progression, annulation, messages clairs, enregistrement garanti       */
+  /* ====================================================================== */
+  function cancelErr() { const e = new Error("Opération annulée"); e.name = "CancelError"; return e; }
+  const isCancel = (e) => e && e.name === "CancelError";
+  function showProgress(msg, cancellable) {
+    const el = $("#progress"); if (!el) return;
+    if (el.hidden) { el.hidden = false; el.classList.remove("show"); void el.offsetWidth; el.classList.add("show"); }
+    $(".pmsg", el).textContent = msg;
+    let frac = null;
+    const m1 = msg.match(/(\d+)\s*%/), m2 = msg.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m1) frac = +m1[1] / 100; else if (m2 && +m2[2] > 0) frac = +m2[1] / +m2[2];
+    else if (S.prog && S.prog.total > 1) frac = S.prog.i / S.prog.total;
+    const bar = $(".pbar", el);
+    bar.classList.toggle("indet", frac == null);
+    $("i", bar).style.width = frac == null ? "" : Math.round(clamp(frac, 0.03, 1) * 100) + "%";
+    const c = $(".pcancel", el);
+    c.hidden = !cancellable;
+    if (cancellable && !(S.op && S.op.cancelled)) { c.disabled = false; c.textContent = "Annuler"; }
+  }
+  function hideProgress() { const el = $("#progress"); if (el) el.hidden = true; }
+  function requestCancel() {
+    const op = S.op; if (!op) return;
+    op.cancelled = true;
+    const c = $("#progress .pcancel"); if (c) { c.disabled = true; c.textContent = "Annulation…"; }
+    for (const h of op.hooks.splice(0)) { try { h(); } catch (_) { /* ignore */ } }
+  }
+  /** Promesse rejetée dès que l'utilisateur clique sur « Annuler ». */
+  function onCancel() {
+    const op = S.op; if (!op) return new Promise(() => {});
+    if (op.cancelled) return Promise.reject(cancelErr());
+    return new Promise((_, rej) => op.hooks.push(() => rej(cancelErr())));
+  }
+  async function runAction(fn, { label = "" } = {}) {
+    const op = { cancelled: false, hooks: [] }, prev = S.op;
+    S.op = op;
+    try { return await fn(); }
+    catch (e) { reportError(e, () => runAction(fn, { label }), label); }
+    finally { if (S.op === op) { S.op = prev || null; if (!S.op) { const el = $("#progress"); if (el && !el.hidden) hideProgress(); } } }
+  }
+
+  /** Traduit une erreur technique en message clair, avec la solution. */
+  function friendly(e) {
+    const code = (e && e.code) || "", raw = (e && e.message) || String(e || "");
+    const m = code + " " + raw;
+    if (/CellEditMode|edit mode|mode (de )?modification|cell.?edit/i.test(m))
+      return { msg: "Excel est en train de modifier une cellule. Appuyez sur Entrée ou Échap dans Excel, puis cliquez sur Réessayer." };
+    if (/AccessDenied|protect|protégé/i.test(m))
+      return { msg: "La feuille est protégée. Ôtez la protection (onglet Révision → Ôter la protection de la feuille), puis réessayez." };
+    if (/ItemNotFound|introuvable|does not exist|n'existe pas/i.test(m))
+      return { msg: "La feuille ou la cellule liée n'existe plus (renommée ou supprimée ?). Vérifiez le classeur, puis réessayez." };
+    if (/PayloadSize|too large|trop volumineux|quota/i.test(m))
+      return { msg: "Le document est trop lourd pour être enregistré dans le classeur.", fix: { label: "Compresser les PDF", fn: () => runAction(compressAll, { label: "Compression impossible" }) } };
+    if (/ApiNotFound|not supported|non pris en charge|requirement/i.test(m))
+      return { msg: "Votre version d'Excel ne connaît pas encore cette fonction. Mettez Office à jour (Fichier → Compte → Options de mise à jour → Mettre à jour).", retry: false };
+    if (/Invalid PDF|InvalidPDF|PDF structure|corrupt|endommag/i.test(m))
+      return { msg: "Ce PDF est abîmé. Ouvrez-le dans votre lecteur PDF, imprimez-le vers « Microsoft Print to PDF », puis réimportez le nouveau fichier.", retry: false };
+    if (/Failed to fetch|NetworkError|network|réseau|load failed|chargé/i.test(m))
+      return { msg: "Un module n'a pas pu être chargé (connexion internet coupée ?). Vérifiez la connexion, puis réessayez." };
+    if (/mot de passe|password/i.test(m)) return { msg: raw, retry: false };
+    return { msg: raw || "Erreur inconnue." };
+  }
+  function reportError(e, retry, label) {
+    if (isCancel(e)) { hideProgress(); return status("Opération annulée.", "warn"); }
+    console.error(e);
+    const f = friendly(e), acts = [];
+    if (f.fix) acts.push(f.fix);
+    if (retry && f.retry !== false) acts.push({ label: "Réessayer", fn: retry });
+    status((label ? label + " : " : "") + f.msg, "err", acts);
+  }
+
+  /* Excel occupé (cellule en cours de saisie…) : on réessaie tout seul. */
+  const BUSY_RE = /CellEditMode|RequestAborted|ServiceNotAvailable|Busy|occupé|mode (de )?modification/i;
+  function patchExcelRun() {
+    if (typeof Excel === "undefined" || !Excel.run || Excel.__snipRetry) return;
+    const orig = Excel.run;
+    Excel.run = function (...a) { return withRetry(() => orig.apply(Excel, a)); };
+    Excel.__snipRetry = true;
+  }
+  async function withRetry(fn) {
+    for (let i = 0; ; i++) {
+      try {
+        const r = await fn();
+        if (i > 0) notify("Excel a répondu : c'est enregistré.", "ok");
+        return r;
+      } catch (e) {
+        if (!BUSY_RE.test(((e && e.code) || "") + " " + ((e && e.message) || "")) || i >= 90) throw e;
+        if (i === 0) notify("Excel est occupé (une cellule est peut-être en cours de saisie). Terminez la saisie avec Entrée ou Échap — SnipCompta réessaie tout seul…", "saving");
+        await sleep(1500);
+      }
+    }
+  }
+  function notify(msg, kind) { status(msg, kind); if (S.win) winSend({ event: "status", msg, kind }); }
+
+  /* Enregistrement des snips : une file d'attente, réessais automatiques. */
+  let saveRun = null, saveDirty = false, saveRetryTimer = null;
+  function persistSnips() {
+    saveDirty = true;
+    if (!saveRun) saveRun = (async () => {
+      try {
+        while (saveDirty) {
+          saveDirty = false;
+          for (let attempt = 1; ; attempt++) {
+            try { await xl.saveSnips([...S.snips.values()], S.meta); S.unsaved = false; break; }
+            catch (e) {
+              if (attempt < 4) { await sleep(1000 * attempt * attempt); continue; }
+              S.unsaved = true;
+              console.error(e);
+              status("Les snips n'ont pas pu être enregistrés dans le classeur (" + friendly(e).msg + "). Ils sont gardés en mémoire et SnipCompta réessaiera dans 30 s.", "warn",
+                [{ label: "Réessayer maintenant", fn: () => persistSnips() }]);
+              clearTimeout(saveRetryTimer);
+              saveRetryTimer = setTimeout(() => { if (S.unsaved) persistSnips(); }, 30000);
+              return;
+            }
+          }
+        }
+      } finally { saveRun = null; }
+    })();
+    return saveRun;
+  }
+
+  /* ====================================================================== */
+  /* Thème sombre automatique, taille de fenêtre mémorisée, mises à jour    */
+  /* ====================================================================== */
+  function isDarkColor(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim()); if (!m) return null;
+    const n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.45;
+  }
+  function officeDark() {
+    try { const t = Office.context.officeTheme; if (t) { const d = isDarkColor(t.bodyBackgroundColor); if (d != null) return d; } } catch (_) { /* hors Office */ }
+    return null;
+  }
+  function applyTheme(forced) {
+    let dark;
+    const pref = S.opts.theme || "auto";
+    if (forced != null && pref === "auto") dark = forced;
+    else if (pref === "dark") dark = true;
+    else if (pref === "light") dark = false;
+    else { const o = officeDark(); dark = o != null ? o : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches); }
+    if (S.isWindow && pref === "auto" && forced == null && S.hubDark != null) dark = S.hubDark;
+    document.body.classList.toggle("dark", dark);
+    if (S.win) winSend({ event: "theme", dark });
+    return dark;
+  }
+  function watchTheme() {
+    applyTheme();
+    try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme()); } catch (_) { /* ancien navigateur */ }
+    try { Office.context.document.addHandlerAsync(Office.EventType.OfficeThemeChanged, () => applyTheme(), () => {}); } catch (_) { /* pas pris en charge */ }
+    let last = document.body.classList.contains("dark");
+    setInterval(() => { if (document.hidden) return; const d = applyTheme(); if (d !== last) last = d; }, 6000);
+  }
+
+  function savedWinSize() {
+    try { const s = JSON.parse(localStorage.getItem("snipcompta.winSize") || "null"); if (s && s.w >= 30 && s.h >= 30) return { w: Math.min(100, s.w), h: Math.min(100, s.h) }; } catch (_) { /* ignore */ }
+    return { w: 70, h: 85 };
+  }
+  function storeWinSize(s) { try { localStorage.setItem("snipcompta.winSize", JSON.stringify(s)); } catch (_) { /* ignore */ } }
+  function trackWinSize() {
+    let t = null;
+    addEventListener("resize", () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const sw = screen.availWidth || screen.width, sh = screen.availHeight || screen.height;
+        if (!sw || !sh) return;
+        const s = { w: Math.round((outerWidth / sw) * 100), h: Math.round((outerHeight / sh) * 100) };
+        if (s.w < 30 || s.h < 30) return;
+        storeWinSize(s); parentSend({ event: "winSize", ...s });
+        render();
+      }, 400);
+    });
+  }
+
+  /* Mise à jour automatique : on compare avec version.json sur le site. */
+  async function checkUpdate(force) {
+    if (location.protocol !== "https:" && !force) return;
+    try {
+      const r = await fetch(new URL("version.json", location.href).href + "?t=" + Date.now(), { cache: "no-store" });
+      if (!r.ok) return;
+      const v = await r.json();
+      if (!v || !v.build || v.build === BUILD) return;
+      const busy = S.table || S.sumParts.length || S.commentDraft || (S.op != null) || S.unsaved;
+      if (new URLSearchParams(location.search).get("v") === v.build) { console.warn("SnipCompta : version.json annonce", v.build, "mais taskpane.js est", BUILD, "(fichier oublié sur GitHub ?)"); return; }
+      const go = () => { const u = new URL(location.href); u.searchParams.set("v", v.build); location.replace(u.href); };
+      if (!S.userActed && !busy && !S.win) { go(); return; }
+      status(`Une nouvelle version de SnipCompta est disponible (${v.label || v.build}).`, "ok", [{ label: "Mettre à jour", fn: go }]);
+    } catch (_) { /* hors ligne : on réessaiera */ }
+  }
+
+
+  /* ====================================================================== */
+  /* Liste des snips de la pièce, à droite du document (fenêtre large)      */
+  /* ====================================================================== */
+  let slSig = "", slFilter = "all";
+  const sideWanted = () => { try { const v = localStorage.getItem("snipcompta.side"); if (v != null) return v === "1"; } catch (_) { /* ignore */ } return true; };
+  function sideFits() { const w = $("#viewWrap"); return !!w && w.clientWidth >= 760; }
+  function updateSide() {
+    const el = $("#sideList"), btn = $("#sideBtn"); if (!el) return;
+    const fits = sideFits(), show = fits && sideWanted() && !!curDoc();
+    if (btn) { btn.hidden = !fits; btn.classList.toggle("on", show); }
+    if (el.hidden === show) { el.hidden = !show; slSig = ""; if (show) setTimeout(render, 0); }
+    if (show) syncSideList();
+  }
+  function setSideWanted(v) { try { localStorage.setItem("snipcompta.side", v ? "1" : "0"); } catch (_) { /* ignore */ } updateSide(); }
+  function sideItems(doc) {
+    const groups = new Map();
+    for (const sn of S.snips.values()) {
+      const r = sn.rects.find((x) => (x.docId || sn.docId) === doc.id); if (!r) continue;
+      const g = groups.get(sn.group || sn.id);
+      if (g) { g.list.push(sn); if (r.page < g.page || (r.page === g.page && r.y0 < g.rect.y0)) { g.page = r.page; g.rect = r; } }
+      else groups.set(sn.group || sn.id, { list: [sn], page: r.page, rect: r });
+    }
+    return [...groups.values()].sort((a, b) => a.page - b.page || a.rect.y0 - b.rect.y0 || a.rect.x0 - b.rect.x0);
+  }
+  function syncSideList(force) {
+    const el = $("#sideList"); if (!el || el.hidden) return;
+    const doc = curDoc(); if (!doc) return;
+    const sig = [doc.id, S.snips.size, S.selSnip, S.snipRev || 0, slFilter].join("|");
+    if (!force && sig === slSig) return;
+    slSig = sig;
+    const all = sideItems(doc), items = slFilter === "all" ? all : all.filter((g) => g.list[0].type === slFilter);
+    $("#slCount").textContent = all.length ? String(all.length) : "";
+    const ul = $("#slItems");
+    if (!items.length) {
+      ul.innerHTML = `<li class="sl-empty">${all.length ? "Aucun snip de ce type sur cette pièce." : "Aucun snip sur cette pièce.<br>Choisissez un outil, puis cliquez un montant."}</li>`;
+      return;
+    }
+    ul.innerHTML = "";
+    let prevPage = 0;
+    for (const g of items) {
+      const sn = g.list[0], st = STYLE[sn.type] || STYLE.text;
+      if (g.page !== prevPage && new Set(items.map((x) => x.page)).size > 1) {
+        const h = document.createElement("li"); h.className = "sl-page"; h.textContent = "Page " + g.page; ul.appendChild(h); prevPage = g.page;
+      }
+      const isTable = g.list.length > 1;
+      const last = g.list[g.list.length - 1];
+      const addr = isTable ? `${String(sn.address).split(":")[0]}:${String(last.address).split(":").pop()}` : sn.address;
+      let val = isTable ? `${g.list.length} lignes` : fmtVal(sn.value);
+      if (!isTable && (sn.type === "valid" || sn.type === "except")) {
+        const pg = doc.pages[g.page];
+        const t = pg && pg.words ? joinWords(wordsInRect(pg.words, g.rect)) : "";
+        if (t) val = t;
+      }
+      const li = document.createElement("li");
+      li.className = "sl-item" + (g.list.some((x) => x.id === S.selSnip) ? " on" : "");
+      li.tabIndex = 0;
+      li.innerHTML = `<span class="sl-chip" style="background:${st.color}">${esc(st.label)}</span><span class="sl-val">${esc(String(val).slice(0, 60))}</span><span class="sl-cell">${esc(addr)}</span>`;
+      li.title = `${st.name} — ${sn.sheet}!${sn.address}${sn.rects.length > 1 ? ` (${sn.rects.length} zones)` : ""}`;
+      const go = () => { S.selSnip = sn.id; scrollToPage(g.page, g.rect); S.flash = { docId: doc.id, page: g.page, rect: g.rect }; drawOverlay(); setTimeout(() => { if (S.flash && S.flash.rect === g.rect) { S.flash = null; drawOverlay(); } }, 1600); xl.selectAddr(sn.sheet, sn.address).catch(() => {}); };
+      li.onclick = go;
+      li.onkeydown = (e) => { if (e.key === "Enter") go(); };
+      ul.appendChild(li);
+    }
+    const on = $(".sl-item.on", ul); if (on) on.scrollIntoView({ block: "nearest" });
+  }
+  function bindSideList() {
+    $("#sideBtn").onclick = () => setSideWanted(!( !$("#sideList").hidden));
+    $("#slClose").onclick = () => setSideWanted(false);
+    $$("[data-slf]").forEach((b) => (b.onclick = () => { slFilter = b.dataset.slf; $$("[data-slf]").forEach((x) => x.classList.toggle("on", x === b)); syncSideList(true); }));
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => updateSide()).observe($("#viewWrap"));
+    updateSide();
+  }
+
+  /* ====================================================================== */
   /* Boutons du ruban (onglet SNIPCOMPTA)                                   */
   /* ====================================================================== */
+  let ACTIONS = null;
+  const getActions = () => ACTIONS || (ACTIONS = buildActions());
+  const LOCAL_ACTIONS = new Set(["openViewer", "openWindow", "toggleStore", "openSettings", "openHelp"]);
   function registerRibbon() {
     if (typeof Office === "undefined" || !Office.actions || !Office.actions.associate) return;
     const show = () => { try { if (Office.addin && Office.addin.showAsTaskpane) Office.addin.showAsTaskpane().catch(() => {}); } catch (_) { /* ancien Excel */ } };
-    const act = (name, fn) => Office.actions.associate(name, (event) => {
-      show();
-      Promise.resolve().then(fn).catch((e) => { console.error(e); status("Erreur : " + e.message, "err"); });
-      if (event && event.completed) event.completed();
-    });
+    for (const [name, fn] of Object.entries(getActions())) {
+      Office.actions.associate(name, (event) => {
+        if (S.win && !LOCAL_ACTIONS.has(name)) winSend({ event: "action", name });
+        else { show(); runAction(fn); }
+        if (event && event.completed) event.completed();
+      });
+    }
+  }
+  function buildActions() {
+    const A = {};
+    const act = (name, fn) => { A[name] = fn; };
+    act("openWindow", () => openWindow());
     const mode = (m) => () => { switchTab("viewer"); setMode(m); };
     act("openViewer", () => switchTab("viewer"));
-    act("importDocs", () => {
-      switchTab("docs");
-      try { $("#fileInput").click(); } catch (_) { /* bloqué : l'utilisateur cliquera */ }
-      status("Cliquez sur « Importer des documents » pour choisir vos PDF.");
-    });
+    act("importDocs", () => { switchTab("viewer"); showImport(); try { $("#fileInput").click(); } catch (_) { /* bloqué : le grand bouton prend le relais */ } });
     act("organizeDocs", () => switchTab("docs"));
     act("modeText", mode("text"));
     act("modeValid", mode("valid"));
@@ -3214,9 +4168,9 @@
     act("exportSnips", () => exportSnips());
     act("removeDoc", () => { switchTab("docs"); status("Cliquez sur « Retirer » à côté du document à enlever du classeur."); });
     act("ocrDoc", () => { switchTab("viewer"); return ocrCurrentDoc(); });
-    act("openSettings", () => { switchTab("docs"); $("#optStore").scrollIntoView(); });
-    act("openHelp", () => { switchTab("docs"); $("#helpBox").scrollIntoView(); });
-    act("importFolder", () => { switchTab("docs"); try { $("#folderInput").click(); } catch (_) { /* bloqué */ } status("Cliquez sur « Importer un dossier » pour choisir le dossier."); });
+    act("openSettings", () => switchTab("settings"));
+    act("openHelp", () => { switchTab("settings"); $("#helpBox").scrollIntoView(); });
+    act("importFolder", () => { switchTab("viewer"); showImport(); try { $("#folderInput").click(); } catch (_) { /* bloqué */ } });
     act("modeMarkup", mode("markup"));
     act("modeNote", mode("note"));
     act("modeRedact", () => { S.markTool = "redact"; switchTab("viewer"); setMode("markup"); });
@@ -3232,26 +4186,35 @@
     act("compressDocs", () => compressAll());
     act("relinkSort", () => relinkActiveSheet());
     act("linkSnipCells", () => linkSnipToSelection());
+    return A;
   }
 
   let started = false;
   async function init(inOffice) {
     if (started) return; started = true;
-    S.inOffice = inOffice;
-    xl = inOffice ? OfficeXL : DemoXL;
+    S.inOffice = inOffice || IS_WINDOW;
+    if (inOffice || IS_WINDOW) patchExcelRun();
+    xl = IS_WINDOW ? RemoteXL : (inOffice ? OfficeXL : DemoXL);
     if (typeof pdfjsLib !== "undefined") pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
     loadOpts();
     loadStyles();
     bindUI();
     bindExtras();
-    if (!inOffice) { $("#demoBar").hidden = false; DemoXL.bind(); }
+    bindSideList();
+    watchTheme();
+    if (IS_WINDOW) trackWinSize();
+    for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { S.userActed = true; }, { once: true, capture: true });
+    if (!S.inOffice) { $("#demoBar").hidden = false; DemoXL.bind(); }
     xl.onSelection(onSelectionChanged);
-    if (inOffice) { try { registerRibbon(); } catch (e) { console.warn("Ruban :", e); } }
-    if (inOffice) { try { xl.onSort && xl.onSort(onRowSorted); } catch (e) { console.warn("Tri :", e); } }
+    if (inOffice && !IS_WINDOW) { try { registerRibbon(); } catch (e) { console.warn("Ruban :", e); } }
+    if (inOffice && !IS_WINDOW) { try { xl.onSort && xl.onSort(onRowSorted); } catch (e) { console.warn("Tri :", e); } }
+    updateWinBtn();
     refreshDocUI();
     try {
-      if (inOffice) {
-        status("Lecture des snips et documents du classeur…", "busy");
+      if (IS_WINDOW) {
+        await initWindow();
+      } else if (inOffice) {
+        status("Lecture des snips et documents du classeur…", "saving");
         const docs = await xl.listDocs();
         for (const d of docs) S.docs.set(d.id, { ...d, kind: kindOf(d.name, d.mime), bytes: null, pages: {}, stored: true });
         await reloadSnips();
@@ -3261,12 +4224,13 @@
       } else {
         status("Mode démo : ouvert hors d'Excel. Les valeurs vont dans la mini-feuille en bas.", "warn");
       }
-    } catch (e) { console.error(e); status("Initialisation : " + e.message, "err"); }
+    } catch (e) { reportError(e, () => location.reload(), "Démarrage incomplet"); }
     render();
+    if (!IS_WINDOW) { checkUpdate(); setInterval(checkUpdate, 30 * 60 * 1000); }
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));

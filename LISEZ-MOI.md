@@ -76,37 +76,38 @@ Il faut **Excel Microsoft 365 sur Windows** (l'onglet du ruban utilise une techn
    - *Remplacer par* : votre adresse **sans la barre oblique finale**, ex. `https://zakaria-l.github.io/snipcompta`
    - Cliquez **Remplacer tout**, puis enregistrez (**Ctrl + S**).
 
-### Étape 3 — Déclarer le complément dans Excel (dossier partagé)
+### Étape 3 — Déclarer le complément dans Excel (double-clic)
 
-1. Créez un dossier, par exemple `C:\SnipCompta-manifeste`, et copiez-y le `manifest.xml` modifié.
-2. Clic droit sur ce dossier → **Propriétés** → onglet **Partage** → **Partager…** → choisissez votre nom → **Partager**. Notez le **chemin réseau** affiché, du type `\\NOM-DU-PC\SnipCompta-manifeste`.
-3. Dans Excel : **Fichier** → **Options** → **Centre de gestion de la confidentialité** → **Paramètres du Centre de gestion de la confidentialité…** → **Catalogues de compléments approuvés**.
-4. Dans *URL du catalogue*, collez le chemin réseau → **Ajouter un catalogue** → cochez **Afficher dans le menu** → **OK** → **OK**.
-5. **Fermez complètement Excel et rouvrez-le.**
-6. Onglet **Accueil** → **Compléments** (ou **Insertion** → **Mes compléments**) → onglet **DOSSIER PARTAGÉ** → **SnipCompta** → **Ajouter**.
-7. Un onglet **SNIPCOMPTA** apparaît dans le ruban, avec ces groupes :
-   - **Importer** : Importer des documents · Organiser · Visionneuse
-   - **Snips** : Texte · Validation · Exception · Somme · Tableau · Commentaire
-   - **Modifier** : Annuler · Supprimer des snips (dans la sélection / tous)
-   - **Automatisation** : Rapprochement · Trouver les sommes
-   - **Documents** : Inclure les PDF dans Excel · Exporter · Retirer · OCR
-   - **Aide** : Aide · Paramètres
+1. Vérifiez que `manifest.xml` (avec votre adresse) est bien en ligne sur GitHub.
+2. Double-cliquez **`Installer-SnipCompta.bat`**. Si Windows affiche « Windows a protégé votre ordinateur », cliquez **Informations complémentaires** → **Exécuter quand même** (le fichier est un simple script lisible avec le Bloc-notes).
+3. Le script vous demande de fermer Excel si besoin, télécharge le manifeste, le déclare dans Excel et vide l'ancien cache. Appuyez sur une touche pour fermer la fenêtre.
+4. Ouvrez Excel : l'onglet **SNIPCOMPTA** est dans le ruban.
 
-> **Variante plus rapide (Microsoft 365 récent)** : **Accueil** → **Compléments** → **Plus de compléments** → **Mes compléments** → **Charger mon complément** → choisissez `manifest.xml`.
+Pour retirer le complément : double-cliquez **`Desinstaller-SnipCompta.bat`** (vos classeurs ne sont pas modifiés).
 
 ---
 
 ## Utilisation au quotidien
 
-1. Onglet **SNIPCOMPTA** → **Importer des documents** (ou glissez vos PDF dans le panneau).
+1. Onglet **SNIPCOMPTA** → **Importer des documents** (ou glissez vos PDF dans le panneau). Toutes les pages défilent à la suite ; en grand, les vignettes des pages s'affichent à gauche.
 2. Cliquez la cellule de destination dans Excel.
-3. Cliquez un outil dans le ruban (Texte, Validation, Exception, Somme, Tableau, Commentaire) et **entourez la zone** sur la pièce.
+3. Choisissez un outil dans le ruban, puis sur la pièce :
+   - **un clic** sur un montant ou un mot le capture (il est surligné au survol) ;
+   - **un double-clic** capture toute la ligne ;
+   - **glisser un cadre** capture une zone ; pendant le glisser, la valeur lue s'affiche à côté du curseur.
+4. Une bulle confirme : « 1 484,86 → B3 ✓ ». Le bouton **Annuler** de la bulle (ou Ctrl+Z) retire le snip.
+
+**Fenêtre séparée agrandie** : la barre d'outils reprend les icônes du ruban, les vignettes des pages sont à gauche et la liste des snips de la pièce à droite (cellule, valeur, page). Un clic sur une ligne montre la zone et sélectionne la cellule Excel ; les petits boutons T, ✓, ✗, Σ, ▦ filtrent la liste. Le bouton ▥ de la barre du haut l'affiche ou la masque.
+
+**Retrouver une valeur** : cliquez une cellule Excel (par exemple `550`) : toutes les occurrences de cette valeur dans la pièce ouverte sont surlignées en orange (550,00 · -550,00 · 550,00 € — mais pas 1 550,00 ni 550,75). Une barre en haut indique « 1 / 3 » : flèches ou **F3** pour passer de l'une à l'autre, **Échap** pour effacer. Si la valeur n'est pas dans cette pièce, la barre propose les autres pièces qui la contiennent. (Désactivable dans **Paramètres**.)
+
+Zoom : **Ctrl + molette**, boutons **↔** (largeur du texte : les marges blanches sont ignorées pour afficher le texte plus gros) et **▯** (page entière). Le zoom est retenu pour chaque document. Les longues opérations (OCR, import de dossier, recherche…) affichent une barre de progression avec **Annuler** (ou Échap). L'apparence suit le thème d'Office (sombre ou clair) ; vous pouvez la forcer dans **Paramètres**.
 
 **Exemple — saisir un relevé bancaire :**
 1. Cellule `A2` sélectionnée, bouton **Tableau** du ruban.
-2. Entourez toutes les opérations de la page 1 (sans le titre ni les en-têtes de colonnes).
-3. Vérifiez l'aperçu. Si une colonne est mal coupée : cliquez dans le cadre violet pour ajouter un séparateur, glissez-le pour le déplacer, double-cliquez pour le supprimer.
-4. Indiquez « Pages 1 à N » si toutes les pages ont la même mise en page, puis **Insérer dans Excel**.
+2. **Cliquez n'importe où dans le tableau** : il est détecté tout seul (cadre violet). Vous pouvez aussi l'entourer à la main.
+3. Vérifiez l'aperçu : **×** retire une ligne (titre, sous-total…), **⇹** fusionne deux colonnes. Pour couper une colonne, cliquez dans le cadre violet ; glissez un trait pour le déplacer, double-cliquez pour le supprimer.
+4. Indiquez « Pages 1 à N » si toutes les pages ont la même mise en page, puis **Insérer dans Excel** (ou Entrée).
 
 **Exemple — pointer un grand livre :** sélectionnez la colonne des montants, puis **Rapprochement** dans le ruban.
 
@@ -116,17 +117,17 @@ Il faut **Excel Microsoft 365 sur Windows** (l'onglet du ruban utilise une techn
 
 ## Mettre à jour le complément
 
-1. Sur GitHub, dans votre dépôt : **+** → **Upload files**, glissez le contenu du paquet de mise à jour (fichiers et dossiers), puis **Commit changes**. Les fichiers existants sont remplacés.
-2. Remplacez `manifest.xml` dans votre dossier `SnipCompta-manifeste` par la nouvelle version.
-3. Fermez Excel, videz le dossier `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\` (collez ce chemin dans la barre de l'Explorateur), rouvrez Excel.
+1. Sur GitHub, dans votre dépôt : **Add file** → **Upload files**, glissez les fichiers du paquet de mise à jour, puis **Commit changes**. Les fichiers existants sont remplacés.
+2. C'est tout : au prochain lancement, SnipCompta voit la nouvelle version (fichier `version.json`) et se recharge tout seul. Si vous étiez en train de travailler, un message propose **Mettre à jour** au moment qui vous arrange.
+3. Seulement si la mise à jour change le ruban (c'est indiqué avec le paquet) : fermez Excel et relancez `Installer-SnipCompta.bat`.
 
 ## Bon à savoir
 
 - **Taille du classeur** : chaque pièce enregistrée alourdit le fichier (environ sa propre taille × 1,35). Pour les gros volumes, décochez « Enregistrer les documents dans le classeur » dans l'onglet Documents : les liens restent, il suffira de réimporter le même fichier pour revoir la preuve.
 - **OCR** : la première lecture d'un scan prend 10 à 20 secondes (chargement du moteur), puis quelques secondes par page. La qualité dépend du scan ; vérifiez les montants critiques.
 - **Feuilles techniques** : SnipCompta crée deux feuilles très masquées, `_SnipData` (les liens) et `_SnipDocs` (les pièces). Ne les supprimez pas si vous voulez garder les liens.
-- **Mise à jour du complément** : remplacez les fichiers sur GitHub. Si Excel garde l'ancienne version, fermez Excel et supprimez le contenu du dossier `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\`.
-- **Si l'onglet n'apparaît pas** : vérifiez que l'adresse du manifeste s'ouvre bien dans le navigateur, que le dossier est bien partagé et qu'Excel a été redémarré.
+- **Excel occupé** : si une cellule est en cours de saisie, SnipCompta attend et réessaie tout seul ; appuyez simplement sur Entrée ou Échap dans Excel. L'enregistrement des snips est lui aussi réessayé automatiquement.
+- **Si l'onglet n'apparaît pas** : vérifiez que l'adresse du manifeste s'ouvre bien dans le navigateur, puis relancez `Installer-SnipCompta.bat`.
 
 ## Ce qui n'est pas (encore) inclus par rapport à DataSnipper
 
@@ -141,6 +142,8 @@ SnipCompta est un outil indépendant, sans lien avec DataSnipper.
 | Fichier | Rôle |
 |---|---|
 | `manifest.xml` | Carte d'identité du complément pour Excel (à modifier, étape 2) |
+| `version.json` | Numéro de version : permet la mise à jour automatique |
+| `Installer-SnipCompta.bat`, `Desinstaller-SnipCompta.bat` | Installation / retrait en un double-clic (fournis à part) |
 | `taskpane.html`, `taskpane.css`, `taskpane.js` | Le complément lui-même |
 | `assets/` | Icônes (dont `assets/rb2/` pour les boutons du ruban) |
 | `lib/` | Bibliothèques open source intégrées : pdf.js (lecture PDF, Apache 2.0), Tesseract.js (OCR, Apache 2.0), pdf-lib (édition PDF, MIT), JSZip (archives, MIT/GPLv3) |

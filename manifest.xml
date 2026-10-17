@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!--
   Manifeste du complément SnipCompta pour Excel.
-  AVANT L'INSTALLATION : remplacez TOUTES les occurrences de https://VOTRE-ADRESSE (Ctrl+H)
+  AVANT L'INSTALLATION : remplacez TOUTES les occurrences de https://protonew67.github.io/snipcompta (Ctrl+H)
   par l'adresse où vous avez mis les fichiers en ligne, SANS barre oblique finale
   (exemple : https://zakaria.github.io/snipcompta). Voir LISEZ-MOI.md.
 -->
@@ -11,16 +11,16 @@
            xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
            xsi:type="TaskPaneApp">
   <Id>493c1e34-5428-4150-b722-00ac9f1680b9</Id>
-  <Version>1.1.0.0</Version>
+  <Version>2.0.0.0</Version>
   <ProviderName>Zakaria Leksir</ProviderName>
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="SnipCompta"/>
   <Description DefaultValue="Extraire, additionner, pointer et rapprocher les montants de vos relevés, factures et scans directement dans Excel, avec lien vers la pièce justificative."/>
-  <IconUrl DefaultValue="https://VOTRE-ADRESSE/assets/icon-32.png"/>
-  <HighResolutionIconUrl DefaultValue="https://VOTRE-ADRESSE/assets/icon-64.png"/>
-  <SupportUrl DefaultValue="https://VOTRE-ADRESSE/taskpane.html"/>
+  <IconUrl DefaultValue="https://protonew67.github.io/snipcompta/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://protonew67.github.io/snipcompta/assets/icon-64.png"/>
+  <SupportUrl DefaultValue="https://protonew67.github.io/snipcompta/taskpane.html"/>
   <AppDomains>
-    <AppDomain>https://VOTRE-ADRESSE</AppDomain>
+    <AppDomain>https://protonew67.github.io/snipcompta</AppDomain>
   </AppDomains>
   <Hosts>
     <Host Name="Workbook"/>
@@ -32,7 +32,7 @@
     </Sets>
   </Requirements>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://VOTRE-ADRESSE/taskpane.html"/>
+    <SourceLocation DefaultValue="https://protonew67.github.io/snipcompta/taskpane.html"/>
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
@@ -57,7 +57,7 @@
                     <bt:Image size="32" resid="I.import.32"/>
                     <bt:Image size="80" resid="I.import.80"/>
               </Icon>
-              <Control xsi:type="Button" id="SC.Import">
+              <Control xsi:type="Menu" id="SC.Import">
                 <Label resid="L.Import"/>
                 <Supertip>
                   <Title resid="L.Import"/>
@@ -68,9 +68,38 @@
                     <bt:Image size="32" resid="I.import.32"/>
                     <bt:Image size="80" resid="I.import.80"/>
                 </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>importDocs</FunctionName>
-                </Action>
+                <Items>
+                  <Item id="SC.ImpDocs">
+                    <Label resid="L.ImpDocs"/>
+                    <Supertip>
+                      <Title resid="L.ImpDocs"/>
+                      <Description resid="T.ImpDocs"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.import.16"/>
+                    <bt:Image size="32" resid="I.import.32"/>
+                    <bt:Image size="80" resid="I.import.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>importDocs</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.ImpFolder">
+                    <Label resid="L.ImpFolder"/>
+                    <Supertip>
+                      <Title resid="L.ImpFolder"/>
+                      <Description resid="T.ImpFolder"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.import.16"/>
+                    <bt:Image size="32" resid="I.import.32"/>
+                    <bt:Image size="80" resid="I.import.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>importFolder</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
               </Control>
               <Control xsi:type="Button" id="SC.Organize">
                 <Label resid="L.Organize"/>
@@ -85,21 +114,6 @@
                 </Icon>
                 <Action xsi:type="ExecuteFunction">
                   <FunctionName>organizeDocs</FunctionName>
-                </Action>
-              </Control>
-              <Control xsi:type="Button" id="SC.Viewer">
-                <Label resid="L.Viewer"/>
-                <Supertip>
-                  <Title resid="L.Viewer"/>
-                  <Description resid="T.Viewer"/>
-                </Supertip>
-                <Icon>
-                    <bt:Image size="16" resid="I.viewer.16"/>
-                    <bt:Image size="32" resid="I.viewer.32"/>
-                    <bt:Image size="80" resid="I.viewer.80"/>
-                </Icon>
-                <Action xsi:type="ShowTaskpane">
-                  <SourceLocation resid="Taskpane.Url"/>
                 </Action>
               </Control>
             </Group>
@@ -185,7 +199,15 @@
                   <FunctionName>modeTable</FunctionName>
                 </Action>
               </Control>
-              <Control xsi:type="Button" id="SC.Comment">
+            </Group>
+            <Group id="SC.G.Annot">
+              <Label resid="G.Annot"/>
+              <Icon>
+                    <bt:Image size="16" resid="I.comment.16"/>
+                    <bt:Image size="32" resid="I.comment.32"/>
+                    <bt:Image size="80" resid="I.comment.80"/>
+              </Icon>
+              <Control xsi:type="Menu" id="SC.Comment">
                 <Label resid="L.Comment"/>
                 <Supertip>
                   <Title resid="L.Comment"/>
@@ -196,31 +218,52 @@
                     <bt:Image size="32" resid="I.comment.32"/>
                     <bt:Image size="80" resid="I.comment.80"/>
                 </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>modeComment</FunctionName>
-                </Action>
+                <Items>
+                  <Item id="SC.CmtCell">
+                    <Label resid="L.CmtCell"/>
+                    <Supertip>
+                      <Title resid="L.CmtCell"/>
+                      <Description resid="T.CmtCell"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.comment.16"/>
+                    <bt:Image size="32" resid="I.comment.32"/>
+                    <bt:Image size="80" resid="I.comment.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>modeComment</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.CmtNote">
+                    <Label resid="L.CmtNote"/>
+                    <Supertip>
+                      <Title resid="L.CmtNote"/>
+                      <Description resid="T.CmtNote"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.note.16"/>
+                    <bt:Image size="32" resid="I.note.32"/>
+                    <bt:Image size="80" resid="I.note.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>modeNote</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
               </Control>
-            </Group>
-            <Group id="SC.G.Edit">
-              <Label resid="G.Edit"/>
-              <Icon>
-                    <bt:Image size="16" resid="I.undo.16"/>
-                    <bt:Image size="32" resid="I.undo.32"/>
-                    <bt:Image size="80" resid="I.undo.80"/>
-              </Icon>
-              <Control xsi:type="Button" id="SC.Undo">
-                <Label resid="L.Undo"/>
+              <Control xsi:type="Button" id="SC.Markup">
+                <Label resid="L.Markup"/>
                 <Supertip>
-                  <Title resid="L.Undo"/>
-                  <Description resid="T.Undo"/>
+                  <Title resid="L.Markup"/>
+                  <Description resid="T.Markup"/>
                 </Supertip>
                 <Icon>
-                    <bt:Image size="16" resid="I.undo.16"/>
-                    <bt:Image size="32" resid="I.undo.32"/>
-                    <bt:Image size="80" resid="I.undo.80"/>
+                    <bt:Image size="16" resid="I.markup.16"/>
+                    <bt:Image size="32" resid="I.markup.32"/>
+                    <bt:Image size="80" resid="I.markup.80"/>
                 </Icon>
                 <Action xsi:type="ExecuteFunction">
-                  <FunctionName>undoLast</FunctionName>
+                  <FunctionName>modeMarkup</FunctionName>
                 </Action>
               </Control>
               <Control xsi:type="Menu" id="SC.Delete">
@@ -235,6 +278,21 @@
                     <bt:Image size="80" resid="I.delete.80"/>
                 </Icon>
                 <Items>
+                  <Item id="SC.Undo">
+                    <Label resid="L.Undo"/>
+                    <Supertip>
+                      <Title resid="L.Undo"/>
+                      <Description resid="T.Undo"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.undo.16"/>
+                    <bt:Image size="32" resid="I.undo.32"/>
+                    <bt:Image size="80" resid="I.undo.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>undoLast</FunctionName>
+                    </Action>
+                  </Item>
                   <Item id="SC.DelSel">
                     <Label resid="L.DelSel"/>
                     <Supertip>
@@ -275,7 +333,7 @@
                     <bt:Image size="32" resid="I.match.32"/>
                     <bt:Image size="80" resid="I.match.80"/>
               </Icon>
-              <Control xsi:type="Button" id="SC.Match">
+              <Control xsi:type="Menu" id="SC.Match">
                 <Label resid="L.Match"/>
                 <Supertip>
                   <Title resid="L.Match"/>
@@ -286,11 +344,40 @@
                     <bt:Image size="32" resid="I.match.32"/>
                     <bt:Image size="80" resid="I.match.80"/>
                 </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>docMatching</FunctionName>
-                </Action>
+                <Items>
+                  <Item id="SC.MatchCell">
+                    <Label resid="L.MatchCell"/>
+                    <Supertip>
+                      <Title resid="L.MatchCell"/>
+                      <Description resid="T.MatchCell"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.match.16"/>
+                    <bt:Image size="32" resid="I.match.32"/>
+                    <bt:Image size="80" resid="I.match.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>docMatching</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.MatchRow">
+                    <Label resid="L.MatchRow"/>
+                    <Supertip>
+                      <Title resid="L.MatchRow"/>
+                      <Description resid="T.MatchRow"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.match.16"/>
+                    <bt:Image size="32" resid="I.match.32"/>
+                    <bt:Image size="80" resid="I.match.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>rowMatching</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
               </Control>
-              <Control xsi:type="Button" id="SC.Sums">
+              <Control xsi:type="Menu" id="SC.Sums">
                 <Label resid="L.Sums"/>
                 <Supertip>
                   <Title resid="L.Sums"/>
@@ -301,62 +388,284 @@
                     <bt:Image size="32" resid="I.findsums.32"/>
                     <bt:Image size="80" resid="I.findsums.80"/>
                 </Icon>
+                <Items>
+                  <Item id="SC.SumsDoc">
+                    <Label resid="L.SumsDoc"/>
+                    <Supertip>
+                      <Title resid="L.SumsDoc"/>
+                      <Description resid="T.SumsDoc"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.findsums.16"/>
+                    <bt:Image size="32" resid="I.findsums.32"/>
+                    <bt:Image size="80" resid="I.findsums.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>findDocSums</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.SumsXl">
+                    <Label resid="L.SumsXl"/>
+                    <Supertip>
+                      <Title resid="L.SumsXl"/>
+                      <Description resid="T.SumsXl"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.findsums.16"/>
+                    <bt:Image size="32" resid="I.findsums.32"/>
+                    <bt:Image size="80" resid="I.findsums.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>findSums</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
+              </Control>
+              <Control xsi:type="Menu" id="SC.Extract">
+                <Label resid="L.Extract"/>
+                <Supertip>
+                  <Title resid="L.Extract"/>
+                  <Description resid="T.Extract"/>
+                </Supertip>
+                <Icon>
+                    <bt:Image size="16" resid="I.extract.16"/>
+                    <bt:Image size="32" resid="I.extract.32"/>
+                    <bt:Image size="80" resid="I.extract.80"/>
+                </Icon>
+                <Items>
+                  <Item id="SC.ExForm">
+                    <Label resid="L.ExForm"/>
+                    <Supertip>
+                      <Title resid="L.ExForm"/>
+                      <Description resid="T.ExForm"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.extract.16"/>
+                    <bt:Image size="32" resid="I.extract.32"/>
+                    <bt:Image size="80" resid="I.extract.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>formExtraction</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.ExInv">
+                    <Label resid="L.ExInv"/>
+                    <Supertip>
+                      <Title resid="L.ExInv"/>
+                      <Description resid="T.ExInv"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.invoice.16"/>
+                    <bt:Image size="32" resid="I.invoice.32"/>
+                    <bt:Image size="80" resid="I.invoice.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>invoiceExtraction</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.ExRec">
+                    <Label resid="L.ExRec"/>
+                    <Supertip>
+                      <Title resid="L.ExRec"/>
+                      <Description resid="T.ExRec"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.receipt.16"/>
+                    <bt:Image size="32" resid="I.receipt.32"/>
+                    <bt:Image size="80" resid="I.receipt.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>receiptExtraction</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
+              </Control>
+              <Control xsi:type="Button" id="SC.Compare">
+                <Label resid="L.Compare"/>
+                <Supertip>
+                  <Title resid="L.Compare"/>
+                  <Description resid="T.Compare"/>
+                </Supertip>
+                <Icon>
+                    <bt:Image size="16" resid="I.compare.16"/>
+                    <bt:Image size="32" resid="I.compare.32"/>
+                    <bt:Image size="80" resid="I.compare.80"/>
+                </Icon>
                 <Action xsi:type="ExecuteFunction">
-                  <FunctionName>findSums</FunctionName>
+                  <FunctionName>versionCompare</FunctionName>
                 </Action>
               </Control>
             </Group>
             <Group id="SC.G.Docs">
               <Label resid="G.Docs"/>
               <Icon>
-                    <bt:Image size="16" resid="I.store.16"/>
-                    <bt:Image size="32" resid="I.store.32"/>
-                    <bt:Image size="80" resid="I.store.80"/>
+                    <bt:Image size="16" resid="I.documents.16"/>
+                    <bt:Image size="32" resid="I.documents.32"/>
+                    <bt:Image size="80" resid="I.documents.80"/>
               </Icon>
-              <Control xsi:type="Button" id="SC.Store">
-                <Label resid="L.Store"/>
+              <Control xsi:type="Menu" id="SC.Docs">
+                <Label resid="L.Docs"/>
                 <Supertip>
-                  <Title resid="L.Store"/>
-                  <Description resid="T.Store"/>
+                  <Title resid="L.Docs"/>
+                  <Description resid="T.Docs"/>
                 </Supertip>
                 <Icon>
+                    <bt:Image size="16" resid="I.documents.16"/>
+                    <bt:Image size="32" resid="I.documents.32"/>
+                    <bt:Image size="80" resid="I.documents.80"/>
+                </Icon>
+                <Items>
+                  <Item id="SC.DStore">
+                    <Label resid="L.DStore"/>
+                    <Supertip>
+                      <Title resid="L.DStore"/>
+                      <Description resid="T.DStore"/>
+                    </Supertip>
+                    <Icon>
                     <bt:Image size="16" resid="I.store.16"/>
                     <bt:Image size="32" resid="I.store.32"/>
                     <bt:Image size="80" resid="I.store.80"/>
-                </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>toggleStore</FunctionName>
-                </Action>
-              </Control>
-              <Control xsi:type="Button" id="SC.Export">
-                <Label resid="L.Export"/>
-                <Supertip>
-                  <Title resid="L.Export"/>
-                  <Description resid="T.Export"/>
-                </Supertip>
-                <Icon>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>toggleStore</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DExpAnn">
+                    <Label resid="L.DExpAnn"/>
+                    <Supertip>
+                      <Title resid="L.DExpAnn"/>
+                      <Description resid="T.DExpAnn"/>
+                    </Supertip>
+                    <Icon>
                     <bt:Image size="16" resid="I.export.16"/>
                     <bt:Image size="32" resid="I.export.32"/>
                     <bt:Image size="80" resid="I.export.80"/>
-                </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>exportSnips</FunctionName>
-                </Action>
-              </Control>
-              <Control xsi:type="Button" id="SC.Remove">
-                <Label resid="L.Remove"/>
-                <Supertip>
-                  <Title resid="L.Remove"/>
-                  <Description resid="T.Remove"/>
-                </Supertip>
-                <Icon>
-                    <bt:Image size="16" resid="I.remove.16"/>
-                    <bt:Image size="32" resid="I.remove.32"/>
-                    <bt:Image size="80" resid="I.remove.80"/>
-                </Icon>
-                <Action xsi:type="ExecuteFunction">
-                  <FunctionName>removeDoc</FunctionName>
-                </Action>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>exportAnnotated</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DExpAudit">
+                    <Label resid="L.DExpAudit"/>
+                    <Supertip>
+                      <Title resid="L.DExpAudit"/>
+                      <Description resid="T.DExpAudit"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.export.16"/>
+                    <bt:Image size="32" resid="I.export.32"/>
+                    <bt:Image size="80" resid="I.export.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>exportSnips</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DRmNo">
+                    <Label resid="L.DRmNo"/>
+                    <Supertip>
+                      <Title resid="L.DRmNo"/>
+                      <Description resid="T.DRmNo"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.removepages.16"/>
+                    <bt:Image size="32" resid="I.removepages.32"/>
+                    <bt:Image size="80" resid="I.removepages.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>removePagesNoSnips</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DRmNoExc">
+                    <Label resid="L.DRmNoExc"/>
+                    <Supertip>
+                      <Title resid="L.DRmNoExc"/>
+                      <Description resid="T.DRmNoExc"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.removepages.16"/>
+                    <bt:Image size="32" resid="I.removepages.32"/>
+                    <bt:Image size="80" resid="I.removepages.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>removePagesNoExceptions</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DRedact">
+                    <Label resid="L.DRedact"/>
+                    <Supertip>
+                      <Title resid="L.DRedact"/>
+                      <Description resid="T.DRedact"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.redact.16"/>
+                    <bt:Image size="32" resid="I.redact.32"/>
+                    <bt:Image size="80" resid="I.redact.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>modeRedact</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DCompress">
+                    <Label resid="L.DCompress"/>
+                    <Supertip>
+                      <Title resid="L.DCompress"/>
+                      <Description resid="T.DCompress"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.compress.16"/>
+                    <bt:Image size="32" resid="I.compress.32"/>
+                    <bt:Image size="80" resid="I.compress.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>compressDocs</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DRemove">
+                    <Label resid="L.DRemove"/>
+                    <Supertip>
+                      <Title resid="L.DRemove"/>
+                      <Description resid="T.DRemove"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.removepages.16"/>
+                    <bt:Image size="32" resid="I.removepages.32"/>
+                    <bt:Image size="80" resid="I.removepages.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>removeDoc</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DRelink">
+                    <Label resid="L.DRelink"/>
+                    <Supertip>
+                      <Title resid="L.DRelink"/>
+                      <Description resid="T.DRelink"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.relink.16"/>
+                    <bt:Image size="32" resid="I.relink.32"/>
+                    <bt:Image size="80" resid="I.relink.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>relinkSort</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="SC.DLink">
+                    <Label resid="L.DLink"/>
+                    <Supertip>
+                      <Title resid="L.DLink"/>
+                      <Description resid="T.DLink"/>
+                    </Supertip>
+                    <Icon>
+                    <bt:Image size="16" resid="I.relink.16"/>
+                    <bt:Image size="32" resid="I.relink.32"/>
+                    <bt:Image size="80" resid="I.relink.80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>linkSnipCells</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
               </Control>
               <Control xsi:type="Button" id="SC.Ocr">
                 <Label resid="L.Ocr"/>
@@ -371,6 +680,21 @@
                 </Icon>
                 <Action xsi:type="ExecuteFunction">
                   <FunctionName>ocrDoc</FunctionName>
+                </Action>
+              </Control>
+              <Control xsi:type="Button" id="SC.Viewer">
+                <Label resid="L.Viewer"/>
+                <Supertip>
+                  <Title resid="L.Viewer"/>
+                  <Description resid="T.Viewer"/>
+                </Supertip>
+                <Icon>
+                    <bt:Image size="16" resid="I.viewer.16"/>
+                    <bt:Image size="32" resid="I.viewer.32"/>
+                    <bt:Image size="80" resid="I.viewer.80"/>
+                </Icon>
+                <Action xsi:type="ShowTaskpane">
+                  <SourceLocation resid="Taskpane.Url"/>
                 </Action>
               </Control>
             </Group>
@@ -420,92 +744,144 @@
     </Hosts>
     <Resources>
       <bt:Images>
-        <bt:Image id="I.comment.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/comment-16.png"/>
-        <bt:Image id="I.comment.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/comment-32.png"/>
-        <bt:Image id="I.comment.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/comment-80.png"/>
-        <bt:Image id="I.delete.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/delete-16.png"/>
-        <bt:Image id="I.delete.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/delete-32.png"/>
-        <bt:Image id="I.delete.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/delete-80.png"/>
-        <bt:Image id="I.except.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/except-16.png"/>
-        <bt:Image id="I.except.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/except-32.png"/>
-        <bt:Image id="I.except.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/except-80.png"/>
-        <bt:Image id="I.export.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/export-16.png"/>
-        <bt:Image id="I.export.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/export-32.png"/>
-        <bt:Image id="I.export.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/export-80.png"/>
-        <bt:Image id="I.findsums.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/findsums-16.png"/>
-        <bt:Image id="I.findsums.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/findsums-32.png"/>
-        <bt:Image id="I.findsums.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/findsums-80.png"/>
-        <bt:Image id="I.help.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/help-16.png"/>
-        <bt:Image id="I.help.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/help-32.png"/>
-        <bt:Image id="I.help.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/help-80.png"/>
-        <bt:Image id="I.import.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/import-16.png"/>
-        <bt:Image id="I.import.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/import-32.png"/>
-        <bt:Image id="I.import.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/import-80.png"/>
-        <bt:Image id="I.match.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/match-16.png"/>
-        <bt:Image id="I.match.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/match-32.png"/>
-        <bt:Image id="I.match.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/match-80.png"/>
-        <bt:Image id="I.ocr.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/ocr-16.png"/>
-        <bt:Image id="I.ocr.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/ocr-32.png"/>
-        <bt:Image id="I.ocr.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/ocr-80.png"/>
-        <bt:Image id="I.organize.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/organize-16.png"/>
-        <bt:Image id="I.organize.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/organize-32.png"/>
-        <bt:Image id="I.organize.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/organize-80.png"/>
-        <bt:Image id="I.remove.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/remove-16.png"/>
-        <bt:Image id="I.remove.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/remove-32.png"/>
-        <bt:Image id="I.remove.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/remove-80.png"/>
-        <bt:Image id="I.settings.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/settings-16.png"/>
-        <bt:Image id="I.settings.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/settings-32.png"/>
-        <bt:Image id="I.settings.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/settings-80.png"/>
-        <bt:Image id="I.store.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/store-16.png"/>
-        <bt:Image id="I.store.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/store-32.png"/>
-        <bt:Image id="I.store.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/store-80.png"/>
-        <bt:Image id="I.sum.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/sum-16.png"/>
-        <bt:Image id="I.sum.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/sum-32.png"/>
-        <bt:Image id="I.sum.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/sum-80.png"/>
-        <bt:Image id="I.table.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/table-16.png"/>
-        <bt:Image id="I.table.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/table-32.png"/>
-        <bt:Image id="I.table.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/table-80.png"/>
-        <bt:Image id="I.text.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/text-16.png"/>
-        <bt:Image id="I.text.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/text-32.png"/>
-        <bt:Image id="I.text.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/text-80.png"/>
-        <bt:Image id="I.undo.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/undo-16.png"/>
-        <bt:Image id="I.undo.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/undo-32.png"/>
-        <bt:Image id="I.undo.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/undo-80.png"/>
-        <bt:Image id="I.valid.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/valid-16.png"/>
-        <bt:Image id="I.valid.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/valid-32.png"/>
-        <bt:Image id="I.valid.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/valid-80.png"/>
-        <bt:Image id="I.viewer.16" DefaultValue="https://VOTRE-ADRESSE/assets/rb/viewer-16.png"/>
-        <bt:Image id="I.viewer.32" DefaultValue="https://VOTRE-ADRESSE/assets/rb/viewer-32.png"/>
-        <bt:Image id="I.viewer.80" DefaultValue="https://VOTRE-ADRESSE/assets/rb/viewer-80.png"/>
+        <bt:Image id="I.comment.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/comment-16.png"/>
+        <bt:Image id="I.comment.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/comment-32.png"/>
+        <bt:Image id="I.comment.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/comment-80.png"/>
+        <bt:Image id="I.compare.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compare-16.png"/>
+        <bt:Image id="I.compare.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compare-32.png"/>
+        <bt:Image id="I.compare.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compare-80.png"/>
+        <bt:Image id="I.compress.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compress-16.png"/>
+        <bt:Image id="I.compress.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compress-32.png"/>
+        <bt:Image id="I.compress.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/compress-80.png"/>
+        <bt:Image id="I.delete.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/delete-16.png"/>
+        <bt:Image id="I.delete.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/delete-32.png"/>
+        <bt:Image id="I.delete.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/delete-80.png"/>
+        <bt:Image id="I.documents.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/documents-16.png"/>
+        <bt:Image id="I.documents.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/documents-32.png"/>
+        <bt:Image id="I.documents.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/documents-80.png"/>
+        <bt:Image id="I.except.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/except-16.png"/>
+        <bt:Image id="I.except.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/except-32.png"/>
+        <bt:Image id="I.except.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/except-80.png"/>
+        <bt:Image id="I.export.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/export-16.png"/>
+        <bt:Image id="I.export.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/export-32.png"/>
+        <bt:Image id="I.export.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/export-80.png"/>
+        <bt:Image id="I.extract.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/extract-16.png"/>
+        <bt:Image id="I.extract.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/extract-32.png"/>
+        <bt:Image id="I.extract.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/extract-80.png"/>
+        <bt:Image id="I.findsums.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/findsums-16.png"/>
+        <bt:Image id="I.findsums.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/findsums-32.png"/>
+        <bt:Image id="I.findsums.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/findsums-80.png"/>
+        <bt:Image id="I.help.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/help-16.png"/>
+        <bt:Image id="I.help.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/help-32.png"/>
+        <bt:Image id="I.help.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/help-80.png"/>
+        <bt:Image id="I.import.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/import-16.png"/>
+        <bt:Image id="I.import.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/import-32.png"/>
+        <bt:Image id="I.import.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/import-80.png"/>
+        <bt:Image id="I.invoice.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/invoice-16.png"/>
+        <bt:Image id="I.invoice.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/invoice-32.png"/>
+        <bt:Image id="I.invoice.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/invoice-80.png"/>
+        <bt:Image id="I.markup.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/markup-16.png"/>
+        <bt:Image id="I.markup.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/markup-32.png"/>
+        <bt:Image id="I.markup.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/markup-80.png"/>
+        <bt:Image id="I.match.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/match-16.png"/>
+        <bt:Image id="I.match.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/match-32.png"/>
+        <bt:Image id="I.match.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/match-80.png"/>
+        <bt:Image id="I.note.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/note-16.png"/>
+        <bt:Image id="I.note.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/note-32.png"/>
+        <bt:Image id="I.note.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/note-80.png"/>
+        <bt:Image id="I.ocr.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/ocr-16.png"/>
+        <bt:Image id="I.ocr.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/ocr-32.png"/>
+        <bt:Image id="I.ocr.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/ocr-80.png"/>
+        <bt:Image id="I.organize.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/organize-16.png"/>
+        <bt:Image id="I.organize.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/organize-32.png"/>
+        <bt:Image id="I.organize.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/organize-80.png"/>
+        <bt:Image id="I.receipt.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/receipt-16.png"/>
+        <bt:Image id="I.receipt.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/receipt-32.png"/>
+        <bt:Image id="I.receipt.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/receipt-80.png"/>
+        <bt:Image id="I.redact.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/redact-16.png"/>
+        <bt:Image id="I.redact.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/redact-32.png"/>
+        <bt:Image id="I.redact.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/redact-80.png"/>
+        <bt:Image id="I.relink.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/relink-16.png"/>
+        <bt:Image id="I.relink.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/relink-32.png"/>
+        <bt:Image id="I.relink.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/relink-80.png"/>
+        <bt:Image id="I.removepages.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/removepages-16.png"/>
+        <bt:Image id="I.removepages.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/removepages-32.png"/>
+        <bt:Image id="I.removepages.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/removepages-80.png"/>
+        <bt:Image id="I.settings.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/settings-16.png"/>
+        <bt:Image id="I.settings.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/settings-32.png"/>
+        <bt:Image id="I.settings.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/settings-80.png"/>
+        <bt:Image id="I.store.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/store-16.png"/>
+        <bt:Image id="I.store.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/store-32.png"/>
+        <bt:Image id="I.store.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/store-80.png"/>
+        <bt:Image id="I.sum.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/sum-16.png"/>
+        <bt:Image id="I.sum.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/sum-32.png"/>
+        <bt:Image id="I.sum.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/sum-80.png"/>
+        <bt:Image id="I.table.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/table-16.png"/>
+        <bt:Image id="I.table.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/table-32.png"/>
+        <bt:Image id="I.table.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/table-80.png"/>
+        <bt:Image id="I.text.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/text-16.png"/>
+        <bt:Image id="I.text.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/text-32.png"/>
+        <bt:Image id="I.text.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/text-80.png"/>
+        <bt:Image id="I.undo.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/undo-16.png"/>
+        <bt:Image id="I.undo.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/undo-32.png"/>
+        <bt:Image id="I.undo.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/undo-80.png"/>
+        <bt:Image id="I.valid.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/valid-16.png"/>
+        <bt:Image id="I.valid.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/valid-32.png"/>
+        <bt:Image id="I.valid.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/valid-80.png"/>
+        <bt:Image id="I.viewer.16" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/viewer-16.png"/>
+        <bt:Image id="I.viewer.32" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/viewer-32.png"/>
+        <bt:Image id="I.viewer.80" DefaultValue="https://protonew67.github.io/snipcompta/assets/rb2/viewer-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://VOTRE-ADRESSE/taskpane.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://protonew67.github.io/snipcompta/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="G.Import" DefaultValue="Importer"/>
         <bt:String id="L.Import" DefaultValue="Importer des documents"/>
+        <bt:String id="L.ImpDocs" DefaultValue="Importer des documents"/>
+        <bt:String id="L.ImpFolder" DefaultValue="Importer un dossier"/>
         <bt:String id="L.Organize" DefaultValue="Organiser"/>
-        <bt:String id="L.Viewer" DefaultValue="Visionneuse"/>
         <bt:String id="G.Snips" DefaultValue="Snips"/>
-        <bt:String id="L.Text" DefaultValue="Texte"/>
-        <bt:String id="L.Valid" DefaultValue="Validation"/>
-        <bt:String id="L.Except" DefaultValue="Exception"/>
-        <bt:String id="L.Sum" DefaultValue="Somme"/>
-        <bt:String id="L.Table" DefaultValue="Tableau"/>
+        <bt:String id="L.Text" DefaultValue="Text Snip"/>
+        <bt:String id="L.Valid" DefaultValue="Validation Snip"/>
+        <bt:String id="L.Except" DefaultValue="Exception Snip"/>
+        <bt:String id="L.Sum" DefaultValue="Sum Snip"/>
+        <bt:String id="L.Table" DefaultValue="Table Snip"/>
+        <bt:String id="G.Annot" DefaultValue="Annoter"/>
         <bt:String id="L.Comment" DefaultValue="Commentaire"/>
-        <bt:String id="G.Edit" DefaultValue="Modifier"/>
-        <bt:String id="L.Undo" DefaultValue="Annuler"/>
+        <bt:String id="L.CmtCell" DefaultValue="Commentaire Excel lié"/>
+        <bt:String id="L.CmtNote" DefaultValue="Bulle sur la pièce"/>
+        <bt:String id="L.Markup" DefaultValue="Annotation"/>
         <bt:String id="L.Delete" DefaultValue="Supprimer des snips"/>
-        <bt:String id="L.DelSel" DefaultValue="Dans la sélection"/>
+        <bt:String id="L.Undo" DefaultValue="Annuler le dernier snip"/>
+        <bt:String id="L.DelSel" DefaultValue="Snips de la sélection"/>
         <bt:String id="L.DelAll" DefaultValue="Tous les snips"/>
         <bt:String id="G.Auto" DefaultValue="Automatisation"/>
-        <bt:String id="L.Match" DefaultValue="Rapprochement"/>
-        <bt:String id="L.Sums" DefaultValue="Trouver les sommes"/>
+        <bt:String id="L.Match" DefaultValue="Document Matching"/>
+        <bt:String id="L.MatchCell" DefaultValue="Cellule par cellule"/>
+        <bt:String id="L.MatchRow" DefaultValue="Ligne par ligne"/>
+        <bt:String id="L.Sums" DefaultValue="Find all sums"/>
+        <bt:String id="L.SumsDoc" DefaultValue="Dans le document affiché"/>
+        <bt:String id="L.SumsXl" DefaultValue="Justifier les totaux sélectionnés"/>
+        <bt:String id="L.Extract" DefaultValue="Document Extraction"/>
+        <bt:String id="L.ExForm" DefaultValue="Formulaire (modèle)"/>
+        <bt:String id="L.ExInv" DefaultValue="Factures"/>
+        <bt:String id="L.ExRec" DefaultValue="Reçus"/>
+        <bt:String id="L.Compare" DefaultValue="Version Compare"/>
         <bt:String id="G.Docs" DefaultValue="Documents"/>
-        <bt:String id="L.Store" DefaultValue="Inclure les PDF dans Excel"/>
-        <bt:String id="L.Export" DefaultValue="Exporter"/>
-        <bt:String id="L.Remove" DefaultValue="Retirer"/>
+        <bt:String id="L.Docs" DefaultValue="Documents"/>
+        <bt:String id="L.DStore" DefaultValue="Inclure les PDF dans Excel"/>
+        <bt:String id="L.DExpAnn" DefaultValue="Exporter les pièces annotées"/>
+        <bt:String id="L.DExpAudit" DefaultValue="Exporter la piste d'audit"/>
+        <bt:String id="L.DRmNo" DefaultValue="Retirer les pages sans snips"/>
+        <bt:String id="L.DRmNoExc" DefaultValue="Retirer les pages sans exceptions"/>
+        <bt:String id="L.DRedact" DefaultValue="Caviarder"/>
+        <bt:String id="L.DCompress" DefaultValue="Compresser les pièces"/>
+        <bt:String id="L.DRemove" DefaultValue="Retirer un document"/>
+        <bt:String id="L.DRelink" DefaultValue="Recaler les liens après un tri"/>
+        <bt:String id="L.DLink" DefaultValue="Relier le snip aux cellules"/>
         <bt:String id="L.Ocr" DefaultValue="OCR"/>
+        <bt:String id="L.Viewer" DefaultValue="Visionneuse"/>
         <bt:String id="G.Help" DefaultValue="Aide"/>
         <bt:String id="L.Help" DefaultValue="Aide"/>
         <bt:String id="L.Settings" DefaultValue="Paramètres"/>
@@ -513,27 +889,49 @@
         <bt:String id="GS.Title" DefaultValue="SnipCompta est installé"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="T.Import" DefaultValue="Importer des relevés, factures ou scans (PDF, PNG, JPG)."/>
-        <bt:String id="T.Organize" DefaultValue="Voir, ouvrir ou retirer les documents du classeur."/>
-        <bt:String id="T.Viewer" DefaultValue="Afficher le panneau SnipCompta et la pièce en cours."/>
-        <bt:String id="T.Text" DefaultValue="Text Snip : entourez un texte ou un montant pour l'inscrire dans la cellule active."/>
-        <bt:String id="T.Valid" DefaultValue="Validation Snip : marque l'élément entouré comme vérifié (✓ vert)."/>
-        <bt:String id="T.Except" DefaultValue="Exception Snip : marque l'élément entouré comme anomalie (✗ rouge)."/>
-        <bt:String id="T.Sum" DefaultValue="Sum Snip : additionne les montants entourés et inscrit le total."/>
-        <bt:String id="T.Table" DefaultValue="Table Snip : extrait un tableau, sur une ou plusieurs pages."/>
-        <bt:String id="T.Comment" DefaultValue="Ajoute un commentaire Excel lié à une zone de la pièce."/>
-        <bt:String id="T.Undo" DefaultValue="Annule le dernier snip."/>
-        <bt:String id="T.Delete" DefaultValue="Supprime les liens vers les pièces (les valeurs restent)."/>
+        <bt:String id="T.Import" DefaultValue="Importer des relevés, factures, scans, archives .zip ou un dossier entier."/>
+        <bt:String id="T.ImpDocs" DefaultValue="Choisir un ou plusieurs fichiers (PDF, images, ZIP, TXT…)."/>
+        <bt:String id="T.ImpFolder" DefaultValue="Importer tous les fichiers pris en charge d'un dossier."/>
+        <bt:String id="T.Organize" DefaultValue="Ranger les documents en dossiers, les renommer, les retirer."/>
+        <bt:String id="T.Text" DefaultValue="Entourez un texte ou un montant pour l'inscrire dans la cellule active (Ctrl+=)."/>
+        <bt:String id="T.Valid" DefaultValue="Marque l'élément entouré comme vérifié ; garde la valeur si la cellule est remplie (Ctrl+,)."/>
+        <bt:String id="T.Except" DefaultValue="Marque l'élément entouré comme anomalie ; garde la valeur si la cellule est remplie (Ctrl+.)."/>
+        <bt:String id="T.Sum" DefaultValue="Additionne les montants entourés et inscrit le total (Ctrl+[)."/>
+        <bt:String id="T.Table" DefaultValue="Extrait un tableau, sur une ou plusieurs pages (Ctrl+M)."/>
+        <bt:String id="T.Comment" DefaultValue="Commentaire Excel lié à la pièce, ou bulle de commentaire sur la pièce."/>
+        <bt:String id="T.CmtCell" DefaultValue="Entourez une zone : la remarque devient un commentaire Excel sur la cellule active."/>
+        <bt:String id="T.CmtNote" DefaultValue="Cliquez sur la pièce pour y poser une bulle de commentaire."/>
+        <bt:String id="T.Markup" DefaultValue="Surligner, écrire, flèches, coches, croix et caviardage sur la pièce."/>
+        <bt:String id="T.Delete" DefaultValue="Annuler ou supprimer des snips (les valeurs restent dans les cellules)."/>
+        <bt:String id="T.Undo" DefaultValue="Annule le dernier snip créé (Ctrl+Z)."/>
         <bt:String id="T.DelSel" DefaultValue="Supprime les snips des cellules sélectionnées."/>
         <bt:String id="T.DelAll" DefaultValue="Supprime tous les snips du classeur."/>
-        <bt:String id="T.Match" DefaultValue="Pointe automatiquement la sélection Excel avec les pièces (montants, références, libellés)."/>
-        <bt:String id="T.Sums" DefaultValue="Retrouve dans les pièces les montants qui composent chaque total sélectionné."/>
-        <bt:String id="T.Store" DefaultValue="Active ou désactive l'enregistrement des pièces dans le classeur."/>
-        <bt:String id="T.Export" DefaultValue="Crée une feuille « Piste d'audit » listant tous les snips avec liens."/>
-        <bt:String id="T.Remove" DefaultValue="Retirer un document du classeur."/>
-        <bt:String id="T.Ocr" DefaultValue="Lance la reconnaissance de texte sur toutes les pages scannées du document affiché."/>
-        <bt:String id="T.Help" DefaultValue="Mode d'emploi rapide."/>
-        <bt:String id="T.Settings" DefaultValue="Options d'enregistrement, d'OCR et de déplacement."/>
+        <bt:String id="T.Match" DefaultValue="Pointe automatiquement la sélection Excel avec les pièces."/>
+        <bt:String id="T.MatchCell" DefaultValue="Chaque cellule sélectionnée est cherchée dans les pièces."/>
+        <bt:String id="T.MatchRow" DefaultValue="Chaque ligne de l'échantillon est rapprochée d'une pièce (n°, date, montant…)."/>
+        <bt:String id="T.Sums" DefaultValue="Retrouve les sommes et leurs composants."/>
+        <bt:String id="T.SumsDoc" DefaultValue="Détecte chaque total du document et les montants qui le composent."/>
+        <bt:String id="T.SumsXl" DefaultValue="Pour chaque total sélectionné dans Excel, retrouve les montants qui le composent."/>
+        <bt:String id="T.Extract" DefaultValue="Extraction de formulaires, factures et reçus."/>
+        <bt:String id="T.ExForm" DefaultValue="Définissez les champs sur un document type, ils sont extraits de tous les autres."/>
+        <bt:String id="T.ExInv" DefaultValue="Fournisseur, n°, dates, HT, TVA, TTC, SIRET, TVA intracom., IBAN."/>
+        <bt:String id="T.ExRec" DefaultValue="Commerçant, date, heure, total, TVA."/>
+        <bt:String id="T.Compare" DefaultValue="Compare deux versions d'un document et liste les différences."/>
+        <bt:String id="T.Docs" DefaultValue="Inclure, exporter, retirer, caviarder et compresser les pièces."/>
+        <bt:String id="T.DStore" DefaultValue="Active ou désactive l'enregistrement des pièces dans le classeur."/>
+        <bt:String id="T.DExpAnn" DefaultValue="PDF avec snips, annotations et commentaires."/>
+        <bt:String id="T.DExpAudit" DefaultValue="Crée une feuille listant tous les snips avec liens."/>
+        <bt:String id="T.DRmNo" DefaultValue="Sur le document affiché."/>
+        <bt:String id="T.DRmNoExc" DefaultValue="Sur le document affiché."/>
+        <bt:String id="T.DRedact" DefaultValue="Masquer définitivement des informations sensibles."/>
+        <bt:String id="T.DCompress" DefaultValue="Réduit la taille du classeur."/>
+        <bt:String id="T.DRemove" DefaultValue="Retirer un document du classeur."/>
+        <bt:String id="T.DRelink" DefaultValue="Remet chaque lien sur la ligne qui contient sa valeur."/>
+        <bt:String id="T.DLink" DefaultValue="Relie le snip choisi aux cellules sélectionnées."/>
+        <bt:String id="T.Ocr" DefaultValue="Reconnaissance du texte des pages scannées du document affiché."/>
+        <bt:String id="T.Viewer" DefaultValue="Afficher le panneau SnipCompta."/>
+        <bt:String id="T.Help" DefaultValue="Mode d'emploi et raccourcis."/>
+        <bt:String id="T.Settings" DefaultValue="Options, couleurs des snips, comportement après tri."/>
         <bt:String id="GS.Desc" DefaultValue="Ouvrez l'onglet SNIPCOMPTA du ruban pour importer vos pièces et commencer."/>
       </bt:LongStrings>
     </Resources>
