@@ -30,7 +30,9 @@ Vos documents ne quittent jamais votre ordinateur : la lecture, l'OCR et l'extra
 - **Export des pièces annotées** (PDF avec snips, annotations et commentaires).
 - **Retirer les pages sans snips / sans exceptions**, **compresser** les pièces.
 - **Nouvelle version d'un document** (même nom, contenu différent) : le travail est transféré et recalé sur le texte.
-- OCR des scans (français + anglais), fait sur votre PC.
+- OCR des scans (français + anglais), fait sur votre PC. Avant la lecture, une copie de l'image est nettoyée (fond, ombres, contraste) et les pages scannées de travers sont redressées. La pièce garde son aspect ; seule une page penchée s'affiche redressée.
+- **Lecture des scans plus précise** (Paramètres) : moteur plus fin, un peu plus lent, téléchargé la première fois (environ 16 Mo). Activable et désactivable à tout moment ; les scans ouverts sont alors relus.
+- **Ajuster un snip** : cliquez un snip pour le sélectionner, puis tirez ses poignées (bords et coins) pour agrandir ou réduire la zone. La valeur de la cellule se met à jour. Seul le texte réellement dans la zone est pris, même au milieu d'un mot.
 
 **Automatisation**
 - **Document Matching** : cellule par cellule, ou **ligne par ligne** (une pièce par ligne d'échantillon) avec options par colonne : obligatoire, approximatif (fautes, abréviations), partiel, tolérance (montant ou %), modèles réutilisables.

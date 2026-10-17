@@ -10,7 +10,7 @@
   <script src="lib/tesseract/tesseract.min.js"></script>
   <script src="lib/pdflib/pdf-lib.min.js"></script>
   <script src="lib/jszip/jszip.min.js"></script>
-  <link rel="stylesheet" href="taskpane.css?v=20261016-0040">
+  <link rel="stylesheet" href="taskpane.css?v=20261017-1445">
 </head>
 <body>
   <!-- ===== Barre du haut : document + recherche + menu ===== -->
@@ -276,6 +276,7 @@
         <div class="group">
           <label class="chk"><input type="checkbox" id="optStore" checked><span>Enregistrer les pièces dans le classeur<small>Le classeur s'ouvre avec ses preuves, même sur un autre ordinateur.</small></span></label>
           <label class="chk"><input type="checkbox" id="optOcr" checked><span>Lire automatiquement les scans (OCR)</span></label>
+          <label class="chk"><input type="checkbox" id="opt_ocrBest"><span>Lecture des scans plus précise<small>Moteur plus fin, un peu plus lent. La première fois, il se télécharge (environ 16 Mo).</small></span></label>
           <label class="chk"><input type="checkbox" id="opt_winOnImport" checked><span>Ouvrir les pièces importées dans une fenêtre séparée</span></label>
           <label class="chk"><input type="checkbox" id="opt_pasteImport" checked><span>Importer les fichiers collés avec Ctrl+V</span></label>
         </div>
@@ -302,6 +303,7 @@
             <li>Ruban <b>SNIPCOMPTA</b>, bouton <b>Importer</b> : ajoutez vos pièces.</li>
             <li>Cliquez la cellule Excel de destination, choisissez un outil dans le ruban, puis cliquez le montant sur la pièce (double-clic pour la ligne, ou entourez une zone).</li>
             <li>Cliquez une cellule liée pour revoir sa preuve ; clic droit sur une zone pour la convertir ou la supprimer.</li>
+            <li>Snip sélectionné : tirez ses poignées pour agrandir ou réduire la zone, la cellule se met à jour. Seul le texte dans la zone est pris.</li>
             <li>Ctrl + glisser : ajouter une preuve au snip de la cellule active.</li>
           </ol>
           <table class="keys">
@@ -327,6 +329,6 @@
   <div id="ctxMenu" hidden></div>
   <input type="file" id="fileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.jfif,.bmp,.gif,.webp,.zip,.txt,.csv,.tsv,.xml,.json,.html,.htm,application/pdf,image/*" hidden>
   <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
-  <script src="taskpane.js?v=20261016-0040"></script>
+  <script src="taskpane.js?v=20261017-1445"></script>
 </body>
 </html>

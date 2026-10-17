@@ -48,7 +48,7 @@
   const round2 = (v) => Math.round(v * 100) / 100;
   const fmtNum = (v) => v.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtVal = (v) => (typeof v === "number" ? fmtNum(v) : String(v));
-  const BUILD = "20261016-0040"; // remplacé à la publication (stamp.py)
+  const BUILD = "20261017-1445"; // remplacé à la publication (stamp.py)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   let statusTimer = null;
@@ -239,6 +239,37 @@
   const joinWords = (ws) => (ws.length ? groupLines(ws).map((l) => l.text).join(" ").trim() : "");
   const inRect = (w, r) => { const cx = (w.x0 + w.x1) / 2, cy = (w.y0 + w.y1) / 2; return cx >= r.x0 && cx <= r.x1 && cy >= r.y0 && cy <= r.y1; };
   const wordsInRect = (words, r) => words.filter((w) => inRect(w, r));
+  /* Sélection au caractère près : seul ce qui est dans la zone est pris */
+  const charWidths = new Map(); let cwCtx = null;
+  function charW(ch) {
+    let v = charWidths.get(ch);
+    if (v == null) {
+      if (!cwCtx) { cwCtx = document.createElement("canvas").getContext("2d"); cwCtx.font = "100px Arial, Helvetica, sans-serif"; }
+      v = Math.max(8, cwCtx.measureText(ch).width); charWidths.set(ch, v);
+    }
+    return v;
+  }
+  /** Partie d'un mot couverte par la zone (un caractère compte s'il est couvert au moins au tiers). */
+  function clipWord(w, r) {
+    const cy = (w.y0 + w.y1) / 2;
+    if (cy < r.y0 || cy > r.y1 || w.x1 <= r.x0 || w.x0 >= r.x1) return null;
+    if (w.x0 >= r.x0 - 0.5 && w.x1 <= r.x1 + 0.5) return w;
+    const ch = [...w.str], ws = ch.map(charW), k = (w.x1 - w.x0) / ws.reduce((a, b) => a + b, 0);
+    let x = w.x0, i0 = -1, i1 = -1, a0 = 0, a1 = 0;
+    ch.forEach((c, i) => {
+      const cw = ws[i] * k, ov = Math.min(x + cw, r.x1) - Math.max(x, r.x0);
+      if (ov >= cw / 3) { if (i0 < 0) { i0 = i; a0 = x; } i1 = i; a1 = x + cw; }
+      x += cw;
+    });
+    if (i0 < 0) return null;
+    return { ...w, str: ch.slice(i0, i1 + 1).join(""), x0: a0, x1: a1 };
+  }
+  const clipWords = (words, r) => words.map((w) => clipWord(w, r)).filter(Boolean);
+  /** Cadre serré autour du texte retenu, sans déborder de la zone dessinée. */
+  function tightBox(ws, r) {
+    const b = bboxOf(ws, 1.5);
+    return { x0: Math.max(b.x0, r.x0 - 1), y0: Math.max(b.y0, r.y0 - 1), x1: Math.min(b.x1, r.x1 + 1), y1: Math.min(b.y1, r.y1 + 1) };
+  }
   function bboxOf(items, pad = 0) {
     if (!items.length) return null;
     return { x0: Math.min(...items.map((w) => w.x0)) - pad, y0: Math.min(...items.map((w) => w.y0)) - pad,
@@ -251,12 +282,19 @@
 
   async function getOcr() {
     if (typeof Tesseract === "undefined") throw new Error("Le moteur OCR n'a pas pu être chargé (fichiers lib/ manquants ?)");
+    const kind = S.opts.ocrBest ? "best" : "std";
+    if (S.ocrWorker && S.ocrKind !== kind) {           // moteur changé dans les paramètres
+      const old = S.ocrWorker; S.ocrWorker = null;
+      old.then((w) => w.terminate()).catch(() => {});
+    }
     if (!S.ocrWorker) {
-      status("Chargement du moteur OCR (la première fois, ~10-20 s)…", "saving");
+      S.ocrKind = kind;
+      status(kind === "best" ? "Chargement du moteur OCR précis (la première fois, ~20-40 s)…" : "Chargement du moteur OCR (la première fois, ~10-20 s)…", "saving");
       S.ocrWorker = Tesseract.createWorker("fra+eng", 1, {
         workerPath: LIB("tesseract/worker.min.js"),
         corePath: LIB("tesseract/core"),
-        langPath: LIB("tesseract/lang"),
+        langPath: LIB(kind === "best" ? "tesseract/lang-best" : "tesseract/lang"),
+        cachePath: "snipcompta-" + kind,                  // les deux moteurs ne se mélangent pas dans le cache
         logger: (m) => { try { if (S.ocrMsg && m && m.status === "recognizing text") status(`${S.ocrMsg} ${Math.round((m.progress || 0) * 100)} %`, S.op ? "busy" : "saving"); } catch (_) { /* annulation : gérée par onCancel */ } },
       });
       S.ocrWorker.catch(() => { S.ocrWorker = null; });
@@ -270,22 +308,14 @@
       const worker = await getOcr();
       S.ocrMsg = `Lecture du scan (OCR) — ${doc.name}, page ${p}…`;
       status(S.ocrMsg, "busy");
+      const skew = await pageSkew(doc, p, pg);
+      const f = doc.kind === "pdf" ? clamp(2500 / pg.w, 1, 4) : clamp(2500 / pg.w, 0.6, 3);
       const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      let f;
-      if (doc.kind === "pdf") {
-        const page = await doc.pdf.getPage(p);
-        f = clamp(2500 / pg.w, 1, 4);
-        const vp = page.getViewport({ scale: f });
-        canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
-        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
-      } else {
-        f = pg.w < 1400 ? 2 : pg.w > 3500 ? 3500 / pg.w : 1;
-        canvas.width = Math.ceil(pg.w * f); canvas.height = Math.ceil(pg.h * f);
-        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
-      }
+      canvas.width = Math.ceil(pg.w * f); canvas.height = Math.ceil(pg.h * f);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      await paintPage(ctx, doc, p, f, skew);
+      // copie nettoyée, uniquement pour la lecture : la pièce affichée ne change pas
+      if (S.opts.ocrClean !== false) { await sleep(0); cleanForOcr(ctx, canvas.width, canvas.height); }
       let data;
       try { ({ data } = await Promise.race([worker.recognize(canvas), onCancel()])); }
       finally { S.ocrMsg = null; }
@@ -297,6 +327,153 @@
       status(`OCR terminé : ${pg.words.length} mots reconnus (${doc.name}, p. ${p}).`, "ok");
     })();
     try { await pg.ocrPromise; } catch (e) { pg.ocrPromise = null; throw e; }
+  }
+
+  /* ---------------- Scans : redressement + nettoyage avant lecture -------- */
+  /** Dessine la page entière dans ctx (taille du canvas = page × sc), redressée de -skew degrés. */
+  async function paintPage(ctx, doc, p, sc, skew) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H); ctx.restore();
+    let m = null;
+    if (skew) {
+      const th = (-skew * Math.PI) / 180, c = Math.cos(th), s = Math.sin(th), cx = W / 2, cy = H / 2;
+      m = [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy];
+    }
+    if (doc.kind === "pdf") {
+      const page = await doc.pdf.getPage(p);
+      const params = { canvasContext: ctx, viewport: page.getViewport({ scale: sc }) };
+      if (m) params.transform = m;
+      await page.render(params).promise;
+    } else {
+      ctx.save(); if (m) ctx.setTransform(...m); ctx.drawImage(doc.img, 0, 0, W, H); ctx.restore();
+    }
+  }
+
+  function grayOf(ctx, W, H) {
+    const d = ctx.getImageData(0, 0, W, H).data, n = W * H, g = new Uint8ClampedArray(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) g[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+    return g;
+  }
+  /** Fond ramené au blanc : ombres de photo, papier gris ou jauni, éclairage inégal. */
+  function flattenBg(g, W, H) {
+    const B = Math.max(12, Math.round(Math.max(W, H) / 64));
+    const gw = Math.ceil(W / B), gh = Math.ceil(H / B), bg = new Float32Array(gw * gh), hist = new Uint32Array(256);
+    for (let by = 0; by < gh; by++) for (let bx = 0; bx < gw; bx++) {
+      hist.fill(0); let n = 0;
+      const ye = Math.min(H, (by + 1) * B), xe = Math.min(W, (bx + 1) * B);
+      for (let y = by * B; y < ye; y += 2) { const o = y * W; for (let x = bx * B; x < xe; x += 2) { hist[g[o + x]]++; n++; } }
+      let k = Math.max(1, Math.round(n * 0.1)), v = 255;          // couleur du papier = 90e centile du bloc
+      while (v > 0) { k -= hist[v]; if (k <= 0) break; v--; }
+      bg[by * gw + bx] = v;
+    }
+    const tmp = new Float32Array(bg.length);
+    const pass = (src, dst, max) => {
+      for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+        let acc = 0, c = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy, xx = x + dx; if (yy < 0 || xx < 0 || yy >= gh || xx >= gw) continue;
+          const v = src[yy * gw + xx]; if (max) { if (v > acc) acc = v; } else { acc += v; c++; }
+        }
+        dst[y * gw + x] = max ? acc : acc / c;
+      }
+    };
+    pass(bg, tmp, true); pass(tmp, bg, false); pass(bg, tmp, false);   // blocs pleins d'encre ignorés, puis lissage
+    const X0 = new Int32Array(W), X1 = new Int32Array(W), TX = new Float32Array(W);
+    for (let x = 0; x < W; x++) { const fx = clamp((x + 0.5) / B - 0.5, 0, gw - 1); X0[x] = Math.floor(fx); X1[x] = Math.min(gw - 1, X0[x] + 1); TX[x] = fx - X0[x]; }
+    const out = new Uint8ClampedArray(W * H);
+    for (let y = 0; y < H; y++) {
+      const fy = clamp((y + 0.5) / B - 0.5, 0, gh - 1), r0 = Math.floor(fy) * gw, r1 = Math.min(gh - 1, Math.floor(fy) + 1) * gw, ty = fy - Math.floor(fy), o = y * W;
+      for (let x = 0; x < W; x++) {
+        const tx = TX[x], a = tmp[r0 + X0[x]] * (1 - tx) + tmp[r0 + X1[x]] * tx, b = tmp[r1 + X0[x]] * (1 - tx) + tmp[r1 + X1[x]] * tx;
+        const bgv = a * (1 - ty) + b * ty;
+        out[o + x] = (g[o + x] * 255) / (bgv > 24 ? bgv : 24);
+      }
+    }
+    return out;
+  }
+  /** Léger flou [1 2 1] : enlève le grain (photo, scan bruité) sans empâter le texte. */
+  function soften(g, W, H) {
+    const t = new Uint8ClampedArray(g.length);
+    for (let y = 0; y < H; y++) { const o = y * W; t[o] = g[o]; t[o + W - 1] = g[o + W - 1]; for (let x = 1; x < W - 1; x++) t[o + x] = (g[o + x - 1] + 2 * g[o + x] + g[o + x + 1] + 2) >> 2; }
+    for (let x = 0; x < W; x++) { g[x] = t[x]; g[(H - 1) * W + x] = t[(H - 1) * W + x]; }
+    for (let y = 1; y < H - 1; y++) { const o = y * W; for (let x = 0; x < W; x++) g[o + x] = (t[o + x - W] + 2 * t[o + x] + t[o + x + W] + 2) >> 2; }
+    return g;
+  }
+  /** Contraste : l'encre la plus foncée devient noire, le papier (et son grain) blanc. */
+  function stretchGray(g) {
+    const hist = new Uint32Array(256); for (let i = 0; i < g.length; i++) hist[g[i]]++;
+    const n = g.length;
+    const pct = (q) => { let v = 0, acc = 0; while (v < 255 && (acc += hist[v]) < n * q) v++; return v; };
+    let lo = pct(0.004);
+    const med = Math.max(pct(0.5), 170);
+    // le grain du papier descend sous la médiane : on blanchit tout ce qui ressemble au papier
+    const tune = S.ocrTune || {};
+    let hi = clamp(pct(tune.hiQ ?? 0.15), Math.round((lo + med) / 2) + 12, med);
+    lo = Math.min(lo, hi - 50);
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) { const t = clamp((v - lo) / (hi - lo), 0, 1); lut[v] = 255 * Math.pow(t, tune.gamma ?? 1); }
+    for (let i = 0; i < n; i++) g[i] = lut[g[i]];
+    return g;
+  }
+  /** Inclinaison des lignes de texte (degrés, + = la ligne descend vers la droite). */
+  function detectSkew(g, W, H) {
+    const pts = [];
+    for (let y = 0; y < H; y++) { const o = y * W; for (let x = 0; x < W; x++) if (g[o + x] < 110) pts.push(x, y); }
+    const n = pts.length / 2; if (n < 300) return 0;
+    const stride = 2 * Math.max(1, Math.ceil(n / 50000)), off = Math.ceil(W * Math.tan((7 * Math.PI) / 180)) + 2;
+    const bins = new Float64Array(H + 2 * off + 2);
+    const score = (deg) => {
+      const t = Math.tan((deg * Math.PI) / 180); bins.fill(0);
+      for (let i = 0; i < pts.length; i += stride) bins[Math.round(pts[i + 1] - pts[i] * t) + off]++;
+      let s = 0; for (let i = 0; i < bins.length; i++) s += bins[i] * bins[i];
+      return s;
+    };
+    let best = 0, bs = score(0);
+    const s0 = bs;
+    for (let d = -6; d <= 6.001; d += 0.5) { const s = score(d); if (s > bs) { bs = s; best = d; } }
+    const c = best;
+    for (let d = c - 0.5; d <= c + 0.501; d += 0.05) { const s = score(d); if (s > bs) { bs = s; best = d; } }
+    if (Math.abs(best) < 0.2 || bs < s0 * 1.04) return 0;
+    return Math.round(best * 100) / 100;
+  }
+  /** Inclinaison d'une page scannée (calculée une fois, sur une petite image). */
+  function pageSkew(doc, p, pg) {
+    if (pg.skew != null) return Promise.resolve(pg.skew);
+    if (!pg.needsOcr || S.opts.ocrClean === false) return Promise.resolve(0);
+    if (!pg.skewP) {
+      pg.skewP = (async () => {
+        const sc = 1000 / pg.w, W = Math.round(pg.w * sc), H = Math.round(pg.h * sc);
+        const c = document.createElement("canvas"); c.width = W; c.height = H;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        await paintPage(ctx, doc, p, sc, 0);
+        return detectSkew(stretchGray(flattenBg(grayOf(ctx, W, H), W, H)), W, H);
+      })().then((v) => (pg.skew = v), (e) => { console.warn("inclinaison", e); return (pg.skew = 0); });
+    }
+    return pg.skewP;
+  }
+  /** Remplace l'image du canvas par sa version nettoyée (niveaux de gris, fond blanc, contraste). */
+  /** Grain de l'image (0 = net, > 0,06 = scan/photo bruité), mesuré sur le papier. */
+  function grainOf(g, W, H) {
+    const hist = new Uint32Array(256); let n = 0;
+    for (let y = 2; y < H - 2; y += 3) { const o = y * W; for (let x = 2; x < W - 2; x += 3) {
+      const c = g[o + x], m = (g[o + x - 2] + g[o + x + 2] + g[o + x - 2 * W] + g[o + x + 2 * W]) >> 2;
+      if (c < 90 || m < 90) continue;                                // encre : ignorée
+      hist[Math.min(255, Math.abs(c - m) * 4)]++; n++;
+    } }
+    if (!n) return 0;
+    let v = 0, acc = 0; while (v < 255 && (acc += hist[v]) < n * 0.5) v++;
+    return v / 4 / 255;
+  }
+  function cleanForOcr(ctx, W, H) {
+    const tune = S.ocrTune || {};
+    let g = grayOf(ctx, W, H);
+    const grain = grainOf(g, W, H);
+    S.lastGrain = grain;
+    if (tune.soften === true || (tune.soften !== false && grain > (tune.grainMin ?? 0.05))) g = soften(g, W, H);
+    g = stretchGray(flattenBg(g, W, H));
+    const im = ctx.createImageData(W, H), d = im.data;
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) { d[j] = d[j + 1] = d[j + 2] = g[i]; d[j + 3] = 255; }
+    ctx.putImageData(im, 0, 0);
   }
 
   /** Infos et texte d'une page. allowOcr : lance l'OCR si la page est un scan. */
@@ -516,15 +693,12 @@
     try {
       const canvas = el.querySelector("canvas");
       const W = +el.dataset.fw, H = +el.dataset.fh, dpr = window.devicePixelRatio || 1;
+      const pg = await pageText(doc, p, { allowOcr: false });
+      const skew = await pageSkew(doc, p, pg);          // scan de travers : affiché redressé
+      if (el.dataset.done !== key) return;
       canvas.style.width = W + "px"; canvas.style.height = H + "px";
       canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-      const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (doc.kind === "pdf") {
-        const page = await doc.pdf.getPage(p);
-        await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: (W / doc.dims[p - 1].w) * dpr }) }).promise;
-      } else ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
-      const pg = await pageText(doc, p, { allowOcr: false });
+      await paintPage(canvas.getContext("2d"), doc, p, (W / doc.dims[p - 1].w) * dpr, skew);
       if (pg.needsOcr && !pg.ocrDone && S.opts.ocr) runAction(() => pageText(doc, p, { allowOcr: true }), { label: "OCR impossible" });
     } catch (e) { if (!e || e.name !== "RenderingCancelledException") console.warn("page", p, e); el.dataset.done = ""; }
   }
@@ -575,8 +749,7 @@
       en.target.dataset.done = "1";
       const p = +en.target.dataset.p, c = en.target.querySelector("canvas"), d = doc.dims[p - 1], w = 84, s = w / d.w;
       c.width = Math.round(w * 2); c.height = Math.round(d.h * s * 2); c.style.width = w + "px"; c.style.height = Math.round(d.h * s) + "px";
-      const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
-      try { if (doc.kind === "pdf") { const page = await doc.pdf.getPage(p); await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: s * 2 }) }).promise; } else ctx.drawImage(doc.img, 0, 0, c.width, c.height); }
+      try { const pg = await pageText(doc, p, { allowOcr: false }); await paintPage(c.getContext("2d"), doc, p, s * 2, await pageSkew(doc, p, pg)); }
       catch (_) { en.target.dataset.done = ""; }
     }), { root: box, rootMargin: "300px 0px" });
     for (let p = 1; p <= doc.numPages; p++) {
@@ -612,7 +785,7 @@
   function drawPageOverlay(ov, doc, p) {
     const sc = S.scale;
     for (const sn of S.snips.values()) {
-      for (const r of sn.rects) {
+      for (const [ri, r] of sn.rects.entries()) {
         if ((r.docId || sn.docId) !== doc.id || r.page !== p) continue;
         const st = STYLE[sn.type] || STYLE.text;
         const showBadge = sn.type !== "table" || /_0$/.test(sn.id) || S.selSnip === sn.id;
@@ -623,6 +796,15 @@
           tag.className = "tag"; tag.style.background = st.color;
           tag.innerHTML = `<i>${esc(st.label)}</i><b>${esc(cell)}</b>`;
           el.appendChild(tag);
+        }
+        if (S.selSnip === sn.id && RESIZABLE.has(sn.type)) {
+          el.classList.add("resizable");
+          for (const h of ["n", "s", "e", "w", "nw", "ne", "sw", "se"]) {
+            const k = document.createElement("i");
+            k.className = "hdl h-" + h; k.dataset.h = h; k.dataset.sid = sn.id; k.dataset.ri = ri;
+            k.title = "Glisser pour agrandir ou réduire la zone";
+            el.appendChild(k);
+          }
         }
       }
     }
@@ -670,6 +852,12 @@
       if (e.button !== 0 || !curDoc() || !ov) return;
       if (S.page !== +ov.dataset.p) { S.page = +ov.dataset.p; updatePageInfo(); }
       S.lastPointer = { x: e.clientX, y: e.clientY };
+      if (e.target.classList.contains("hdl")) {
+        const sn = S.snips.get(e.target.dataset.sid); if (!sn) return;
+        const ri = +e.target.dataset.ri;
+        drag = { kind: "resize", sn, ri, h: e.target.dataset.h, r0: { ...sn.rects[ri] }, r: null, el: e.target.parentElement, ov };
+        hideHover(); ov.setPointerCapture(e.pointerId); e.preventDefault(); e.stopPropagation(); return;
+      }
       if (e.target.classList.contains("sep")) {
         drag = { kind: "sep", idx: +e.target.dataset.i, el: e.target, ov };
         ov.setPointerCapture(e.pointerId); e.preventDefault(); return;
@@ -682,6 +870,13 @@
     host.addEventListener("pointermove", (e) => {
       if (!drag) { hoverAt(e); return; }
       const pt = evPt(e);
+      if (drag.kind === "resize") {
+        const r = drag.r = resizedRect(drag.r0, drag.h, pt), el = drag.el, sc = S.scale;
+        el.style.left = r.x0 * sc + "px"; el.style.top = r.y0 * sc + "px";
+        el.style.width = (r.x1 - r.x0) * sc + "px"; el.style.height = (r.y1 - r.y0) * sc + "px";
+        liveResize(drag.sn, drag.ri, r, e);
+        return;
+      }
       if (drag.kind === "sep") {
         const t = S.table; if (!t) return;
         t.seps[drag.idx] = clamp(pt.x, t.rect.x0 + 2, t.rect.x1 - 2);
@@ -706,6 +901,7 @@
       hideLive();
       S.lastPointer = { x: e.clientX, y: e.clientY };
       if (d.kind === "sep") { S.table.seps.sort((a, b) => a - b); drawOverlay(); updateTablePreview(); return; }
+      if (d.kind === "resize") { if (d.r) runAction(() => resizeSnip(d.sn, d.ri, d.r), { label: "Ajustement impossible" }); else drawOverlay(); return; }
       const pt = evPt(e, d.ov);
       if (d.el) d.el.remove();
       if (!d.moved || S.mode === "nav") { handleClick(pt, e); return; }
@@ -713,7 +909,7 @@
       runAction(() => handleRect(r, { ctrl: e.ctrlKey, from: { x: d.x, y: d.y }, to: pt }));
     };
     host.addEventListener("pointerup", end);
-    host.addEventListener("pointercancel", () => { if (drag && drag.el) drag.el.remove(); drag = null; hideLive(); });
+    host.addEventListener("pointercancel", () => { if (drag && drag.kind === "resize") drawOverlay(); else if (drag && drag.el) drag.el.remove(); drag = null; hideLive(); });
     host.addEventListener("dblclick", (e) => {
       if (e.target.classList.contains("sep") && S.table) { S.table.seps.splice(+e.target.dataset.i, 1); drawOverlay(); updateTablePreview(); }
     });
@@ -789,11 +985,11 @@
     const doc = curDoc(), p = S.page;
     if (target) { const tv = typed(target.text); return placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...target.rect }], tv.f); }
     const pg = await pageText(doc, p, { allowOcr: true });
-    const ws = wordsInRect(pg.words, r);
+    const ws = clipWords(pg.words, r);
     const text = joinWords(ws);
     if (!text) return status(pg.needsOcr && !S.opts.ocr ? "Page scannée : activez l'OCR dans les réglages." : "Aucun texte dans la zone sélectionnée.", "warn");
     const tv = typed(text);
-    await placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...bboxOf(ws, 2) }], tv.f);
+    await placeSnip("text", tv.v, [{ docId: doc.id, page: p, ...tightBox(ws, r) }], tv.f);
   }
 
   async function doMarkSnip(type, r) {
@@ -809,6 +1005,73 @@
     const cur = await xl.readCell(ac.sheet, ac.row, ac.col);
     if (cur !== "" && cur != null) return linkExistingCell(type, ac, rects, cur);
     await placeSnip(type, type === "valid" ? "✓" : "✗", rects);
+  }
+
+  /* ---------------- Ajuster la zone d'un snip (poignées) ----------------- */
+  const RESIZABLE = new Set(["text", "sum", "valid", "except", "comment"]);
+  function resizedRect(r0, h, pt) {
+    const r = { x0: r0.x0, y0: r0.y0, x1: r0.x1, y1: r0.y1 }, m = 3;
+    if (h.includes("w")) r.x0 = Math.min(pt.x, r0.x1 - m);
+    if (h.includes("e")) r.x1 = Math.max(pt.x, r0.x0 + m);
+    if (h.includes("n")) r.y0 = Math.min(pt.y, r0.y1 - m);
+    if (h.includes("s")) r.y1 = Math.max(pt.y, r0.y0 + m);
+    return r;
+  }
+  function parseA1(a) {
+    const m = /^\$?([A-Z]+)\$?(\d+)/i.exec(String(a || "")); if (!m) return null;
+    let c = 0; for (const ch of m[1].toUpperCase()) c = c * 26 + ch.charCodeAt(0) - 64;
+    return { row: +m[2] - 1, col: c - 1 };
+  }
+  /** Nouvelle valeur d'un snip si sa zone n° ri devient r (null = valeur inchangée). */
+  async function valueAfterResize(sn, ri, r, { live = false } = {}) {
+    const rect = sn.rects[ri], doc = S.docs.get(rect.docId || sn.docId); if (!doc) return null;
+    const textOf = async (rc) => { const pg = live ? doc.pages[rc.page] : await pageText(doc, rc.page, { allowOcr: true }); return pg && pg.words ? pg.words : []; };
+    if (sn.type === "text" && ri === 0) {
+      const ws = clipWords(await textOf(rect), r), text = joinWords(ws);
+      if (!text) return { empty: true };
+      const tv = typed(text);
+      return { value: tv.v, fmt: tv.f, box: tightBox(ws, r) };
+    }
+    if (sn.type === "sum") {
+      let total = 0, n = 0;
+      for (const [i, rc] of sn.rects.entries()) {
+        const z = i === ri ? { ...rc, ...r } : rc, d = S.docs.get(z.docId || sn.docId); if (!d) continue;
+        const pg = live ? d.pages[z.page] : await pageText(d, z.page, { allowOcr: true });
+        const a = amountsIn(wordsInRect((pg && pg.words) || [], z)); n += a.length;
+        total += a.reduce((s, x) => s + x.value, 0);
+      }
+      return { value: round2(total), fmt: NUMFMT, count: n };
+    }
+    return null;
+  }
+  let liveTok = 0;
+  async function liveResize(sn, ri, r, e) {
+    const tok = ++liveTok, v = await valueAfterResize(sn, ri, r, { live: true });
+    if (tok !== liveTok || !drag) return;
+    const el = $("#live"); if (!el) return;
+    if (!v) { el.hidden = true; return; }
+    el.textContent = v.empty ? "(aucun texte)" : (sn.type === "sum" ? "Σ " : "") + fmtVal(v.value);
+    el.hidden = false; placeFloat(el, e.clientX + 16, e.clientY + 18);
+  }
+  async function resizeSnip(sn, ri, r) {
+    hideLive(); const cf = $("#confirm"); if (cf) cf.hidden = true;
+    if (!S.snips.has(sn.id) || !sn.rects[ri]) return drawOverlay();
+    const v = await valueAfterResize(sn, ri, r);
+    if (v && v.empty) { drawOverlay(); return status("Aucun texte dans la nouvelle zone : le snip n'a pas changé.", "warn"); }
+    sn.rects[ri] = { ...sn.rects[ri], ...r, ...(v && v.box ? v.box : {}) };
+    let msg = `Zone ajustée (${sn.sheet}!${sn.address}).`;
+    if (v && v.value !== sn.value) {
+      const rc = parseA1(sn.address);
+      if (rc) {
+        await xl.write(sn.sheet, rc.row, rc.col, [[v.value]], sn.type, v.fmt ? [[v.fmt]] : null);
+        sn.value = v.value; sn.cellVals = [v.value];
+        msg = `Zone ajustée : ${sn.sheet}!${sn.address} = ${fmtVal(v.value)}`;
+      }
+    }
+    S.selSnip = sn.id;
+    await persistSnips();
+    drawOverlay(); refreshSnipList();
+    status(msg, "ok");
   }
 
   /* ---------------- Sum Snip ------------------------------------------- */
@@ -856,6 +1119,10 @@
     }
     const nLines = groupLines(words).length;
     const tol = Math.floor(nLines * 0.06);
+    // écart minimal entre deux colonnes, proportionnel à la taille du texte
+    // (une image scannée compte en pixels, pas en points : « 1 590,07 » ne doit pas être coupé)
+    const hs = words.map((w) => w.y1 - w.y0).sort((a, b) => a - b);
+    const minGap = Math.max(6, 0.62 * (hs.length ? hs[hs.length >> 1] : 9));
     let first = 0, last = n - 1;
     while (first < n && cov[first] <= tol) first++;
     while (last > 0 && cov[last] <= tol) last--;
@@ -864,7 +1131,7 @@
     while (i <= last) {
       if (cov[i] <= tol) {
         let j = i; while (j <= last && cov[j] <= tol) j++;
-        if (j - i >= 6) seps.push(r.x0 + (i + j) / 2);
+        if (j - i >= minGap) seps.push(r.x0 + (i + j) / 2);
         i = j;
       } else i++;
     }
@@ -1827,7 +2094,16 @@
     try { Object.assign(S.opts, JSON.parse(localStorage.getItem("snipcompta.opts") || "{}")); } catch (_) { /* stockage indisponible */ }
     if ((S.opts.v || 0) < 5) { S.opts.autoSearch = true; S.opts.v = 5; saveOpts(); }   // v5 : surlignage activé par défaut
     $("#optStore").checked = S.opts.store; $("#optOcr").checked = S.opts.ocr; $("#optAdvance").checked = S.opts.advance;
-    for (const k of ["pasteImport", "autoSearch", "sortFollow", "winOnImport", "cropMargins"]) { const el = $("#opt_" + k); if (el) { el.checked = S.opts[k] !== false && !!S.opts[k]; el.onchange = () => { S.opts[k] = el.checked; saveOpts(); if (k === "cropMargins") render(); }; } }
+    for (const k of ["pasteImport", "autoSearch", "sortFollow", "winOnImport", "cropMargins", "ocrBest"]) { const el = $("#opt_" + k); if (el) { el.checked = S.opts[k] !== false && !!S.opts[k]; el.onchange = () => { S.opts[k] = el.checked; saveOpts(); if (k === "cropMargins") render(); if (k === "ocrBest") rereadScans(); }; } }
+  }
+  /** Moteur OCR changé : les scans déjà lus seront relus avec le nouveau moteur. */
+  function rereadScans() {
+    let n = 0;
+    for (const d of S.docs.values()) for (const pg of Object.values(d.pages || {})) {
+      if (pg && pg.needsOcr && (pg.ocrDone || pg.ocrPromise)) { pg.ocrDone = false; pg.ocrPromise = null; pg.words = []; pg.lines = []; n++; }
+    }
+    status(S.opts.ocrBest ? "Lecture précise activée" + (n ? " : les scans ouverts vont être relus." : ".") : "Lecture standard rétablie" + (n ? " : les scans ouverts vont être relus." : "."), "ok");
+    if (n) { const pe = $("#pages"); if (pe) pe.dataset.key = ""; render(); }
   }
   function saveOpts() { try { localStorage.setItem("snipcompta.opts", JSON.stringify(S.opts)); } catch (_) { /* ignore */ } }
 
@@ -2273,6 +2549,19 @@
       const w = doc.img.naturalWidth, h = doc.img.naturalHeight;
       pdf.addPage([w, h]).drawImage(img, { x: 0, y: 0, width: w, height: h });
     }
+    // scans de travers : on exporte la page redressée, comme à l'écran (les cadres tombent juste)
+    for (let p = 1; p <= doc.numPages; p++) {
+      const pg = await pageText(doc, p, { allowOcr: false });
+      const skew = await pageSkew(doc, p, pg);
+      if (!skew) continue;
+      const f = doc.kind === "pdf" ? clamp(2200 / pg.w, 1.5, 3) : 1;
+      const c = document.createElement("canvas"); c.width = Math.ceil(pg.w * f); c.height = Math.ceil(pg.h * f);
+      await paintPage(c.getContext("2d"), doc, p, f, skew);
+      const img = await pdf.embedJpg(new Uint8Array(await (await new Promise((r) => c.toBlob(r, "image/jpeg", 0.88))).arrayBuffer()));
+      const { width, height } = pdf.getPage(p - 1).getSize();
+      pdf.insertPage(p - 1, [width, height]).drawImage(img, { x: 0, y: 0, width, height });
+      pdf.removePage(p);
+    }
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const pages = pdf.getPages();
     const P = (n) => pages[n - 1];
@@ -2434,7 +2723,9 @@
     for (const z of zones) { if (!byPage.has(z.page)) byPage.set(z.page, []); byPage.get(z.page).push(normRect(z)); }
     if (doc.kind === "image") {
       const c = document.createElement("canvas"); c.width = doc.img.naturalWidth; c.height = doc.img.naturalHeight;
-      const x = c.getContext("2d"); x.drawImage(doc.img, 0, 0); x.fillStyle = "#000";
+      const x = c.getContext("2d");
+      await paintPage(x, doc, 1, 1, await pageSkew(doc, 1, await pageText(doc, 1, { allowOcr: false })));
+      x.fillStyle = "#000";
       for (const r of byPage.get(1) || []) x.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
       await replaceDocBytes(doc, new Uint8Array(await (await new Promise((r) => c.toBlob(r, "image/png"))).arrayBuffer()), "image/png");
     } else {
@@ -2445,8 +2736,8 @@
         const f = clamp(2200 / page.getViewport({ scale: 1 }).width, 1.5, 3);
         const vp = page.getViewport({ scale: f });
         const c = document.createElement("canvas"); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-        const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        const ctx = c.getContext("2d");
+        await paintPage(ctx, doc, p, f, await pageSkew(doc, p, await pageText(doc, p, { allowOcr: false })));
         ctx.fillStyle = "#000";
         for (const r of rects) ctx.fillRect(r.x0 * f, r.y0 * f, (r.x1 - r.x0) * f, (r.y1 - r.y0) * f);
         const png = new Uint8Array(await (await new Promise((res) => c.toBlob(res, "image/png"))).arrayBuffer());
@@ -3759,7 +4050,7 @@
     const ws = wordsInRect(pg.words, r);
     let txt = "";
     if (S.mode === "sum") { const a = amountsIn(ws); if (a.length) txt = `Σ ${fmtNum(round2(a.reduce((s, x) => s + x.value, 0)))}  (${a.length} montant${a.length > 1 ? "s" : ""})`; }
-    else { const s = joinWords(ws); if (s) { const tv = typed(s); txt = tv.f === NUMFMT ? fmtNum(tv.v) : String(tv.v); } }
+    else { const s = joinWords(clipWords(pg.words, r)); if (s) { const tv = typed(s); txt = tv.f === NUMFMT ? fmtNum(tv.v) : String(tv.v); } }
     if (!txt) { el.hidden = true; return; }
     el.textContent = txt.length > 70 ? txt.slice(0, 68) + "…" : txt;
     el.hidden = false;
@@ -4230,7 +4521,7 @@
   }
 
   // exposé pour les tests automatisés
-  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText };
+  window.SnipCompta = { S, switchTab, checkUpdate, cellHighlight, gotoHit, clearHits, onSelectionChanged, runAction, status, withRetry, persistSnips, applyTheme, targetAt, tableRectAt, friendly, setZoom, rpcSend, rpcRecv, hubHandle, windowRecv, RemoteXL, setRpcChunk: (n) => { RPC_CH = n; }, setTransport: (toHub, toWin) => { parentSendRaw = toHub; winSendRaw = toWin; }, setHubXL: (x) => { HUBXL = x; }, initWindow, getActions, registerRibbon, findDocSums, formAddField, formPreview, formExport, runDocExtraction, extractInvoice, extractReceipt, compareVersions, exportComparison, runRowMatch, prepareRowMatch, annotatedPdf, removePages, compressAll, applyRedactions, addMarkup, transferVersion, realign, linkSnipToSelection, convertSnip, attachEvidence, expandFiles, textToPdf, searchTerms, autoSearchCell, findSums, exportSnips, deleteSnipsInSelection, deleteAllSnips, insertComment, sumRuns, typed, parseAmount, findAmounts, groupLines, autoColumns, extractTable, wordsInRect, DemoXL, setMode, handleRect, insertSum, insertTable, importFiles, doSearch, runMatch, pageText, resizeSnip, clipWords, paintPage, cleanForOcr, pageSkew, detectSkew };
 
   if (typeof Office !== "undefined" && Office.onReady) {
     Office.onReady((info) => init(!!info && info.host === Office.HostType.Excel));

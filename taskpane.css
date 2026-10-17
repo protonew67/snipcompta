@@ -571,3 +571,19 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 .sl-cell { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--chrome); }
 .sl-empty { padding: 18px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 #sideBtn.on { color: var(--accent); background: var(--accent-soft); }
+
+/* ===== v8 : poignées pour ajuster la zone d'un snip (à l'extérieur du cadre : l'intérieur reste cliquable) ===== */
+.ovbox.resizable { z-index: 4; }
+.ovbox .hdl { position: absolute; pointer-events: auto; touch-action: none; z-index: 2; }
+.ovbox .hdl.h-n, .ovbox .hdl.h-s { left: 4px; right: 4px; height: 7px; cursor: ns-resize; }
+.ovbox .hdl.h-n { top: -9px; } .ovbox .hdl.h-s { bottom: -9px; }
+.ovbox .hdl.h-e, .ovbox .hdl.h-w { top: -2px; bottom: -2px; width: 8px; cursor: ew-resize; }
+.ovbox .hdl.h-e { right: -10px; } .ovbox .hdl.h-w { left: -10px; }
+.ovbox .hdl.h-e::after, .ovbox .hdl.h-w::after { content: ""; position: absolute; left: 2px; top: 50%; width: 4px; height: 14px; min-height: 8px; transform: translateY(-50%); border-radius: 2px; background: #fff; box-shadow: 0 0 0 1.5px var(--accent), 0 1px 3px rgba(0,0,0,.25); }
+.ovbox .hdl.h-n::after, .ovbox .hdl.h-s::after { content: ""; position: absolute; left: 50%; top: 1px; width: 14px; height: 4px; transform: translateX(-50%); border-radius: 2px; background: #fff; box-shadow: 0 0 0 1.5px var(--accent), 0 1px 3px rgba(0,0,0,.25); }
+.ovbox .hdl.h-nw, .ovbox .hdl.h-ne, .ovbox .hdl.h-sw, .ovbox .hdl.h-se { width: 8px; height: 8px; background: #fff; border-radius: 2px; box-shadow: 0 0 0 1.5px var(--accent), 0 1px 3px rgba(0,0,0,.25); z-index: 3; }
+.ovbox .hdl.h-nw { left: -10px; top: -10px; cursor: nwse-resize; } .ovbox .hdl.h-se { right: -10px; bottom: -10px; cursor: nwse-resize; }
+.ovbox .hdl.h-ne { right: -10px; top: -10px; cursor: nesw-resize; } .ovbox .hdl.h-sw { left: -10px; bottom: -10px; cursor: nesw-resize; }
+#pages.drawing .ovbox .hdl.h-n, #pages.drawing .ovbox .hdl.h-s { cursor: ns-resize; }
+#pages.drawing .ovbox .hdl.h-e, #pages.drawing .ovbox .hdl.h-w { cursor: ew-resize; }
+.ovbox.resizable .tag { left: calc(100% + 14px); }
